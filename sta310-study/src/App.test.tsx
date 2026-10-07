@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import App from './App'
-import { getChapter } from './content'
+import { chapters, getChapter } from './content'
 import { PROGRESS_STORAGE_KEY, createEmptyProgress } from './logic/progress'
 
 interface StoredProgress {
@@ -36,12 +36,14 @@ describe('chapter overview', () => {
       screen.getByRole('heading', { name: 'Study companion for the course book' }),
     ).toBeInTheDocument()
 
-    for (const chapter of [1, 2, 3, 4, 5, 6, 7]) {
-      expect(screen.getByLabelText(new RegExp(`^Chapter ${chapter}:`))).toBeInTheDocument()
+    for (const chapter of chapters) {
+      expect(
+        screen.getByLabelText(new RegExp(`^Chapter ${chapter.number}:`)),
+      ).toBeInTheDocument()
     }
 
     expect(screen.getAllByText(/Collett/).length).toBeGreaterThan(0)
-    expect(screen.getByText('7 chapters of the core text (1-7)')).toBeInTheDocument()
+    expect(screen.getByText('17 chapters of the course book')).toBeInTheDocument()
   })
 
   it('starts from a clean, empty progress state', () => {

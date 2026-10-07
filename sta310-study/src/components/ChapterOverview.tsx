@@ -86,7 +86,7 @@ export function ChapterOverview({ chapters, progress, onOpen }: ChapterOverviewP
       <div className="section-title">
         <h2>Chapters</h2>
         <span className="small muted">
-          {chapters.length} chapters of the core text (1-7)
+          {chapters.length} chapters of the course book
         </span>
       </div>
 

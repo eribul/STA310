@@ -2,9 +2,9 @@
 
 Responsiv, backend-fri webbapp för studenter på **STA310 Överlevnadsanalys**.
 Appen är ett instuderingsstöd till kursboken — Collett, *Modelling Survival Data
-in Medical Research* (4:e uppl., 2023) — och täcker **kapitel 1–7** (bokens
-kärna). Broström/`bostrom`-materialet används **inte**: det är lärarinspiration
-och ska inte exponeras för studenter.
+in Medical Research* (4:e uppl., 2023) — och täcker **hela boken, kapitel 1–17**.
+Broström/`bostrom`-materialet används **inte**: det är lärarinspiration och ska
+inte exponeras för studenter.
 
 Allt studentinriktat innehåll är på engelska (kursens undervisningsspråk).
 Innehållet är författat utifrån bok-PDF:erna i `../book/` och följer samma
@@ -21,6 +21,17 @@ frågetyper och kapitelprogression som `../exercises/`.
 | 5 | Parametriska regressionsmodeller | 14 | 6 |
 | 6 | Flexibla parametriska modeller | 11 | 6 |
 | 7 | Modellkontroll i parametriska modeller | 11 | 6 |
+| 8 | Tidsberoende kovariater | 13 | 6 |
+| 9 | Intervallcensurerade data | 11 | 6 |
+| 10 | Frailty-modeller | 13 | 6 |
+| 11 | Icke-proportionella hazarder | 12 | 6 |
+| 12 | Competing risks | 13 | 6 |
+| 13 | Upprepade händelser och event history | 13 | 6 |
+| 14 | Beroende censurering | 12 | 6 |
+| 15 | Power och sampelstorlek | 11 | 6 |
+| 16 | Bayesiansk överlevnadsanalys | 13 | 6 |
+| 17 | Överlevnadsanalys med R | 15 | 6 |
+| **Totalt** | | **214** | **102** |
 
 ## Snabbstart
 
@@ -43,7 +54,7 @@ src/
     types.ts                # datamodellen (Chapter, Flashcard, MultipleChoiceQuestion)
     index.ts                # registret: lägg till nya kapitel här
     chapters/
-      chapter-01.ts … chapter-07.ts
+      chapter-01.ts … chapter-17.ts
   logic/
     quiz.ts                 # rena funktioner: blanda, förbereda, rätta, poängsätta
     progress.ts             # rena funktioner: svår-markering, statistik, serialisering
@@ -95,8 +106,8 @@ export const chapter03: Chapter = {
 - `id` är nyckeln till studentens sparade progress. Ändra inte ett id i onödan —
   då tappar studenten sin markering och statistik för just det kortet. Lägg hellre
   till ett nytt id.
-- Nya kapitel: skapa `chapters/chapter-08.ts` och lägg till det i arrayen i
-  `src/content/index.ts`.
+- Nya kapitel: skapa `chapters/chapter-NN.ts` och lägg till det i arrayen i
+  `src/content/index.ts`. Kapitelregistret behöver ha samma nummer som boken.
 - Inget LaTeX stöds i gränssnittet (ingen math-renderare). Skriv `S(t)`, `beta`,
   `gamma` som vanlig text. Enhetstestet `content.test.ts` faller om `$` eller
   `\hat`/`\beta` smyger in.

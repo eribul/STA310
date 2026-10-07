@@ -6,6 +6,16 @@ import { chapter04 } from './chapters/chapter-04'
 import { chapter05 } from './chapters/chapter-05'
 import { chapter06 } from './chapters/chapter-06'
 import { chapter07 } from './chapters/chapter-07'
+import { chapter08 } from './chapters/chapter-08'
+import { chapter09 } from './chapters/chapter-09'
+import { chapter10 } from './chapters/chapter-10'
+import { chapter11 } from './chapters/chapter-11'
+import { chapter12 } from './chapters/chapter-12'
+import { chapter13 } from './chapters/chapter-13'
+import { chapter14 } from './chapters/chapter-14'
+import { chapter15 } from './chapters/chapter-15'
+import { chapter16 } from './chapters/chapter-16'
+import { chapter17 } from './chapters/chapter-17'
 
 /**
  * The single source of truth for the study content. Add a new chapter by
@@ -20,6 +30,16 @@ export const chapters: Chapter[] = [
   chapter05,
   chapter06,
   chapter07,
+  chapter08,
+  chapter09,
+  chapter10,
+  chapter11,
+  chapter12,
+  chapter13,
+  chapter14,
+  chapter15,
+  chapter16,
+  chapter17,
 ]
 
 /** Look up a chapter by its book number. */

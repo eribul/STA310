@@ -88,7 +88,7 @@ function App() {
         <p className="muted small">
           Offline study aid · all progress is stored in this browser only ·
           source material: Collett, <em>Modelling Survival Data in Medical
-          Research</em> (4th ed., 2023), chapters 1-7.
+          Research</em> (4th ed., 2023).
         </p>
       </footer>
     </div>

@@ -7,7 +7,7 @@
  * the registry in `src/content/index.ts`.
  *
  * Source material: Collett, *Modelling Survival Data in Medical Research*,
- * 4th edition (2023), chapters 1-7. The `source` field on each item points at
+ * 4th edition (2023), chapters 1-17. The `source` field on each item points at
  * the book section the item was built from (e.g. "§3.3").
  */
 

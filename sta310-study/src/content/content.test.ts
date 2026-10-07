@@ -10,9 +10,11 @@ import {
 } from './index'
 
 describe('chapter registry', () => {
-  it('exposes the seven core chapters of the course book', () => {
-    expect(chapters).toHaveLength(7)
-    expect(chapters.map((chapter) => chapter.number)).toEqual([1, 2, 3, 4, 5, 6, 7])
+  it('exposes all chapters of the course book, in order', () => {
+    expect(chapters).toHaveLength(17)
+    expect(chapters.map((chapter) => chapter.number)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+    ])
   })
 
   it('has unique chapter numbers and slugs', () => {
