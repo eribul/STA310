@@ -1,0 +1,16 @@
+project:
+  type: default
+
+# Single-source: CS2.qmd renders to a questions PDF (default profile) and a
+# solutions PDF (--profile solutions).
+profile:
+  default: questions
+  group:
+    - [questions, solutions]
+
+filters:
+  - _solutions.lua
+
+execute:
+  warning: false
+  message: false

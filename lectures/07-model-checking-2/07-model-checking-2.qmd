@@ -1,0 +1,740 @@
+---
+title: "Lecture 7: Model Checking in the Cox Model II and a Complete Analysis"
+subtitle: "STA310 Survival Analysis · Collett Chapter 4 (part 2)"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+myeloma <- read.table(file.path(data_dir, "Survival of multiple myeloma patients.dat"), header = TRUE)
+
+# PBC: randomised trial (first 312 patients have trt); death = event, transplant = censored
+pbc2 <- pbc |>
+  filter(!is.na(trt)) |>
+  mutate(death = as.integer(status == 2),
+         trt = factor(trt, levels = c(2, 1), labels = c("Placebo", "D-penicillamine")),
+         sex = factor(sex, levels = c("m", "f"), labels = c("Male", "Female")),
+         edema = factor(edema, levels = c(0, 0.5, 1),
+                        labels = c("None", "Untreated/resolved", "Despite diuretics")),
+         years = time / 365.25)
+vars <- c("years", "death", "trt", "age", "sex", "edema", "bili", "albumin", "protime", "stage")
+cc <- pbc2 |> select(id, all_of(vars)) |> drop_na()
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. Recap of lecture 6
+2. Influential observations
+3. Functional form of continuous covariates
+4. Transformations
+5. Validation of a Cox model
+6. **A complete worked analysis** (PBC data)
+7. Exercise and take-home
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+You can
+
+- quantify the influence of one patient on a coefficient (`dfbeta`)
+- check and model non-linear effects (splines, log transform) and test non-linearity
+- explain concordance and optimism-corrected validation
+- carry out and report a full Cox analysis as a workflow
+:::
+:::
+
+## Recap: lecture 6
+
+- Residuals for the Cox model: Cox–Snell (overall fit), martingale and deviance (outliers, form), Schoenfeld (PH)
+- PH assumption: $h(t \mid x) = h_0(t)\exp(\beta' x)$, checked with log-minus-log plots and `cox.zph()`
+
+. . .
+
+Today we finish Chapter 4 with three more questions:
+
+1. Is **one patient** driving the result? (influence)
+2. Is a continuous covariate really **linear on the log-hazard scale**? (functional form)
+3. Would the model **predict well** in new patients? (validation)
+
+Then we put lectures 4-7 together in one analysis.
+
+# Influential observations
+
+## Why influence?
+
+A fitted model can look fine overall and still depend on a few patients.
+
+- An observation is **influential** if removing it changes $\hat\beta$ noticeably
+- Typically: extreme covariate value (leverage) **and** an event much earlier or later than the model expects (large residual)
+- Small samples and rare events are most vulnerable
+
+. . .
+
+Goal: not to delete "bad" patients, but to **know how fragile** the conclusions are.
+
+## Influence on a coefficient: `dfbeta`
+
+Let $\hat\beta_{(-i)}$ be the estimate when patient $i$ is left out. Then
+
+$$\texttt{dfbeta}_{ij} \approx \hat\beta_j - \hat\beta_{j(-i)}$$
+
+- Collett uses an approximation based on **score residuals** (one-step), so no refitting is needed: $\Delta_i\hat\beta \approx \text{(score residuals)}_i \cdot \widehat{\text{var}}(\hat\beta)$
+- `dfbetas` = `dfbeta` divided by the standard error of $\hat\beta_j$: the shift in **standard-error units**
+- Rule of thumb: look at observations that stand out; $|\texttt{dfbetas}| > 2/\sqrt{n}$ is a common (crude) flag
+
+```r
+residuals(fit, type = "dfbeta")    # n x p matrix
+residuals(fit, type = "dfbetas")   # scaled by se
+residuals(fit, type = "score")     # score residuals
+```
+
+## Example: multiple myeloma
+
+48 patients, survival in months. Covariates: age, sex, `bun` (blood urea nitrogen), `ca`, `hb`, `pcells`, `protein`.
+
+```{r}
+fit_my <- coxph(Surv(time, status) ~ age + sex + bun + ca + hb + pcells + protein,
+                data = myeloma)
+broom::tidy(fit_my, exponentiate = TRUE, conf.int = TRUE) |>
+  select(term, HR = estimate, conf.low, conf.high, p.value) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+Is any coefficient driven by single patients?
+
+## `dfbeta` plot by patient
+
+```{r}
+#| fig-height: 4.6
+db <- residuals(fit_my, type = "dfbeta")
+colnames(db) <- names(coef(fit_my))
+as_tibble(db) |>
+  mutate(patient = myeloma$patient) |>
+  pivot_longer(-patient, names_to = "term", values_to = "dfbeta") |>
+  ggplot(aes(patient, dfbeta)) +
+  geom_segment(aes(xend = patient, yend = 0)) +
+  facet_wrap(~ term, scales = "free_y") +
+  labs(x = "Patient", y = "dfbeta (change in coefficient)")
+```
+
+```{r}
+#| include: false
+dbs <- residuals(fit_my, type = "dfbetas")
+colnames(dbs) <- names(coef(fit_my))
+worst <- which(abs(dbs) == max(abs(dbs)), arr.ind = TRUE)
+w_row <- worst[1, "row"]; w_term <- colnames(dbs)[worst[1, "col"]]
+fit_wo <- coxph(Surv(time, status) ~ age + sex + bun + ca + hb + pcells + protein,
+                data = myeloma[-w_row, ])
+```
+
+## Reading the plot and refitting
+
+Largest scaled influence: patient `r myeloma$patient[w_row]` on `r w_term` (`dfbetas` = `r round(dbs[w_row, w_term], 2)`; crude flag $2/\sqrt{n}$ = `r round(2/sqrt(nrow(myeloma)), 2)`).
+
+Check by **refitting without** that patient:
+
+```{r}
+tibble(term = names(coef(fit_my)),
+       `HR all` = exp(coef(fit_my)),
+       `HR without` = exp(coef(fit_wo)),
+       `p all` = summary(fit_my)$coef[, "Pr(>|z|)"],
+       `p without` = summary(fit_wo)$coef[, "Pr(>|z|)"]) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+Compare how the hazard ratio of `r w_term` moves, and whether any conclusion (direction, significance) changes.
+
+## What to do with influential observations
+
+1. **Check the data**: typing error? wrong unit? impossible value? Correct it if it is an error.
+2. **Is the patient clinically different** (different population)? Document it.
+3. **Refit without** and report both results: a **sensitivity analysis**.
+4. If conclusions are unchanged: report the main analysis, mention the check.
+5. If conclusions change: say so; do not hide it. Consider whether the model (functional form, missing covariate) is wrong.
+
+::: {.callout-warning}
+Do not delete observations only because they are influential, and do not choose the analysis giving the "best" p-value.
+:::
+
+## Leverage and other diagnostics (briefly)
+
+- **Leverage**: observations far from the covariate mean; large `dfbeta` with a small residual usually means high leverage
+- **Likelihood displacement** (Collett 4.3.2): influence on the **whole** set of estimates, based on score residuals
+- **Deviance residuals** (lecture 6) show poorly fitted patients; `dfbeta` shows patients that move the fit
+
+A patient can be an outlier without being influential, and vice versa. Always look at both.
+
+# Functional form
+
+## The assumption of linearity
+
+For a continuous $x$ the Cox model assumes
+
+$$\log h(t \mid x) = \log h_0(t) + \beta x$$
+
+A one-unit increase has the **same** hazard ratio everywhere on the scale. For many lab values (bilirubin, creatinine, PSA) that is implausible: effects are often multiplicative, and the distribution is skewed.
+
+. . .
+
+Approaches (Collett 4.2.3):
+
+1. Plot **martingale residuals of the null model** against $x$, add a smoother
+2. Fit a more flexible form: transformation, quadratic, spline
+3. Compare nested models with a **likelihood-ratio test**
+
+## The PBC data used from here on
+
+Mayo Clinic randomised trial of D-penicillamine vs placebo in primary biliary cirrhosis (1974-84). `survival::pbc`.
+
+- Time in days; `status`: 0 = censored, 1 = **transplant**, 2 = **dead**
+- We study **death**; transplanted patients are **censored at transplant** (more in the workflow)
+- Randomised patients: `r nrow(pbc2)`; complete cases for the variables we use: `r nrow(cc)`
+
+```{r}
+cc |> select(years, death, trt, age, sex, edema, bili, albumin, stage) |> head(4)
+```
+
+## Step 1: martingale residuals from the null model
+
+Recall lecture 6 (`bun` in the myeloma data): fit a model **without** the covariate (and with the others you want to adjust for), then plot residuals against the covariate. There `bun` was skewed and a log scale was suggested; the same issue arises here for bilirubin.
+
+```{r}
+#| fig-height: 4.2
+#| output-location: column
+fit0 <- coxph(Surv(years, death) ~ age + albumin + edema, data = cc)
+cc$mart <- residuals(fit0, type = "martingale")
+ggplot(cc, aes(bili, mart)) +
+  geom_point(alpha = .5) +
+  geom_smooth(method = "loess", formula = y ~ x, se = FALSE) +
+  labs(x = "Bilirubin (mg/dl)", y = "Martingale residual")
+```
+
+The smooth curve estimates the **functional form** of $\log h$ in `bili`; but most points are squeezed at the left because of skewness.
+
+## Same plot, on the log scale
+
+```{r}
+#| fig-height: 4.2
+ggplot(cc, aes(bili, mart)) +
+  geom_point(alpha = .5) +
+  geom_smooth(method = "loess", formula = y ~ x, se = FALSE) +
+  scale_x_log10() +
+  labs(x = "Bilirubin (mg/dl), log scale", y = "Martingale residual")
+```
+
+On the log scale the smooth is roughly **linear and increasing**: suggests $\log(\text{bili})$ is a natural scale. (Martingale residuals have a skewed distribution, so look at the trend, not single points.)
+
+## Why transform? Skewed lab values
+
+```{r}
+#| fig-height: 3.6
+#| echo: false
+cc |>
+  pivot_longer(c(bili), names_to = "x", values_to = "v") |>
+  bind_rows(cc |> transmute(x = "log(bili)", v = log(bili))) |>
+  mutate(x = factor(x, levels = c("bili", "log(bili)"))) |>
+  ggplot(aes(v)) + geom_histogram(bins = 30, fill = "grey60") +
+  facet_wrap(~ x, scales = "free_x") + labs(x = NULL, y = "Patients")
+```
+
+- Right-skewed biomarkers: a few large values get huge leverage and influence in a linear term
+- $\log$: a **doubling** of bilirubin has one constant HR (interpretable: HR per doubling = $\exp(\beta \log 2)$, or use `log2(bili)`)
+- Only for positive values; with zeros use $\log(x+c)$ with a justified $c$
+
+## Option A: categorise (and why not as default)
+
+```{r}
+cc <- cc |> mutate(bili_cat = cut(bili, c(0, 1.1, 3, Inf), labels = c("<=1.1", "1.1-3", ">3")))
+table(cc$bili_cat)
+coxph(Surv(years, death) ~ bili_cat + age + albumin + edema, data = cc) |>
+  broom::tidy(exponentiate = TRUE, conf.int = TRUE) |>
+  filter(str_detect(term, "bili")) |>
+  select(term, HR = estimate, conf.low, conf.high) |>
+  mutate(across(where(is.numeric), \(x) round(x, 2)))
+```
+
+Useful as a **diagnostic** (is the trend monotone?), but as the final model it has costs:
+
+- **information loss** and loss of power; patients just either side of a cut-point are treated as different, those far apart within a group as equal
+- cut-points are arbitrary (or data-driven, which inflates type I error)
+- the step function is biologically implausible
+
+## Option B: polynomial term
+
+Add a quadratic term and test it with the likelihood-ratio test.
+
+```{r}
+f_lin  <- coxph(Surv(years, death) ~ log(bili) + age + albumin + edema, data = cc)
+f_quad <- coxph(Surv(years, death) ~ log(bili) + I(log(bili)^2) + age + albumin + edema, data = cc)
+anova(f_lin, f_quad)
+```
+
+Likelihood-ratio statistic $2(\ell_{quad} - \ell_{lin})$, compared to $\chi^2_1$. A small p-value would mean curvature on the log scale. Polynomials can behave badly at the ends of the range, which motivates splines.
+
+## Option C: splines
+
+A **spline** is a smooth piecewise polynomial; we let the data determine the shape with a few degrees of freedom (df).
+
+```r
+splines::ns(x, df = 3)       # natural cubic spline (linear in the tails)
+rms::rcs(x, 4)               # restricted cubic spline, 4 knots (3 df)
+survival::pspline(x, df = 4) # penalised spline, plots with termplot()
+```
+
+- `ns()` and `rcs()`: **parametric** (a few coefficients); fit in `coxph()`
+- Individual spline coefficients are not interpretable: **plot the fitted curve** instead
+- Choose few df (3-4); more df means more flexibility and more variance
+
+## Spline fit for bilirubin
+
+```{r}
+#| fig-height: 4.2
+f_ns <- coxph(Surv(years, death) ~ splines::ns(log(bili), df = 3) + age + albumin + edema, data = cc)
+tp <- termplot(f_ns, term = 1, se = TRUE, plot = FALSE)[[1]]
+ggplot(tp, aes(exp(x), y)) +
+  geom_ribbon(aes(ymin = y - 1.96 * se, ymax = y + 1.96 * se), alpha = .25) +
+  geom_line() + scale_x_log10() +
+  labs(x = "Bilirubin (mg/dl), log scale", y = "Log hazard ratio (centred)")
+```
+
+## Likelihood-ratio test of non-linearity
+
+The linear model is **nested** in the spline model: test $H_0$: effect of $\log(\text{bili})$ is linear.
+
+```{r}
+anova(f_lin, f_ns)
+```
+
+```{r}
+#| include: false
+p_nl <- anova(f_lin, f_ns)[2, "Pr(>|Chi|)"]
+p_nl_raw <- anova(coxph(Surv(years, death) ~ bili + age + albumin + edema, data = cc),
+                  coxph(Surv(years, death) ~ splines::ns(bili, df = 3) + age + albumin + edema, data = cc))[2, "Pr(>|Chi|)"]
+aic <- c(raw = AIC(coxph(Surv(years, death) ~ bili + age + albumin + edema, data = cc)),
+         log = AIC(f_lin), ns_log = AIC(f_ns))
+```
+
+- Spline on $\log(\text{bili})$ versus linear in $\log(\text{bili})$: p = `r signif(p_nl, 2)`
+- Spline on raw `bili` versus linear raw `bili`: p = `r signif(p_nl_raw, 2)`
+- AIC: raw linear `r round(aic["raw"], 1)`, $\log$ linear `r round(aic["log"], 1)`, $\log$ spline `r round(aic["ns_log"], 1)`
+
+A non-significant LR test does not prove linearity (power!), but together with the plot it supports using $\log(\text{bili})$ **linearly**: simple and interpretable.
+
+## Choosing among the options
+
+| Approach | Pros | Cons |
+|---|---|---|
+| Linear | simple, one HR | wrong if curved or skewed |
+| Transform ($\log$) | simple, one HR, handles skew | needs justification |
+| Categorise | easy to explain, diagnostic | information loss, arbitrary cut-points |
+| Polynomial | easy to test | poor in tails |
+| Spline (`ns`, `rcs`, `pspline`) | flexible | needs plot, df choice |
+
+. . .
+
+Also in practice: time origin matters too (e.g. diagnosis vs. study entry, age as time scale), but that is a design decision made before modelling.
+
+# Validation
+
+## Does the model predict well?
+
+Fit statistics tell us the model describes **these** data. For a **prognostic** model we also ask how it performs in **new** patients.
+
+- **Discrimination**: does the model rank patients correctly? Concordance (c-index)
+- **Calibration**: do predicted survival probabilities agree with observed ones?
+- **Overfitting**: apparent performance is optimistic, especially with many covariates and few events
+
+## Concordance (c-index, Harrell's C)
+
+Among **comparable** pairs of patients (the one with shorter time had an event), the proportion where the patient with the higher linear predictor $\hat\eta_i = \hat\beta'x_i$ failed first.
+
+- 0.5 = no better than chance; 1 = perfect ranking
+- Accounts for censoring; depends on the censoring pattern, and measures only ranking, not calibration
+
+```{r}
+f_c <- coxph(Surv(years, death) ~ log(bili) + age + albumin + edema, data = cc)
+concordance(f_c)
+```
+
+The model ranks about `r round(100 * concordance(f_c)$concordance)`% of comparable pairs correctly (apparent, i.e. in the same data used to fit).
+
+## Calibration idea
+
+Group patients by predicted risk (e.g. 4 groups at 3 years), compare mean **predicted** survival to **Kaplan–Meier** observed survival in each group.
+
+- Good calibration: points on the diagonal
+- A model can discriminate well but be badly calibrated (e.g. a different population)
+- In R: `rms::calibrate()` (needs `cph(..., x = TRUE, y = TRUE, surv = TRUE, time.inc = )`), or `riskRegression::`/`pec::`
+
+## Bootstrap optimism correction: `rms::validate`
+
+Idea: refit on bootstrap samples, evaluate on the original data; the average drop estimates the **optimism**.
+
+```{r}
+dd <- rms::datadist(cc); options(datadist = "dd")
+f_cph <- rms::cph(Surv(years, death) ~ log(bili) + age + albumin + edema, data = cc,
+                  x = TRUE, y = TRUE)
+v <- rms::validate(f_cph, B = 200)
+v[c("Dxy", "R2"), c("index.orig", "optimism", "index.corrected")]
+```
+
+```{r}
+#| include: false
+cidx <- function(d) 0.5 + d / 2
+c_orig <- cidx(v["Dxy", "index.orig"]); c_corr <- cidx(v["Dxy", "index.corrected"])
+```
+
+`rms` reports Somers' $D_{xy} = 2(C - 0.5)$. Apparent $C$ = `r round(c_orig, 3)`, optimism-corrected $C$ = `r round(c_corr, 3)`. Here the optimism is small: few variables relative to the number of events.
+
+## Overfitting and events per variable
+
+- The effective sample size in survival analysis is the **number of events**, not $n$
+- Rule of thumb: **at least about 10 events per candidate parameter**, more is better (spline terms and dummy variables count)
+- Number of events here: `r sum(cc$death)`; parameters in the model: `r length(coef(f_c))`
+- Variable selection (stepwise) **inside** the bootstrap too, otherwise optimism is underestimated
+- Real external validation (other hospital, later period) is better than internal validation
+
+::: {.callout-note}
+Internal validation by bootstrap estimates how well the **modelling procedure** would do in similar patients; it does not replace external validation.
+:::
+
+# A complete Cox analysis
+
+## The workflow
+
+```{mermaid}
+flowchart LR
+  A[1 Question] --> B[2 Data and censoring]
+  B --> C[3 KM and log-rank]
+  C --> D[4 Univariable Cox]
+  D --> E[5 Multivariable model]
+  E --> F[6 Checks: PH, form, influence]
+  F --> G[7 Final model]
+  G --> H[8 Present results]
+  H --> I[9 Interpret and limitations]
+```
+
+We follow this recipe for the PBC trial. Each step uses a tool from lectures 2-7.
+
+## 1. The question
+
+Primary biliary cirrhosis: chronic liver disease, progressive, fatal without transplant.
+
+- **Primary question**: does D-penicillamine prolong survival compared with placebo?
+- **Secondary question**: which baseline characteristics are **prognostic** for death (adjusted for each other)?
+- Event: **death from any cause**
+- Time origin: randomisation. Time scale: years since randomisation.
+
+::: {.callout-note}
+Writing the question and the estimand down first prevents data-driven analyses later. For a randomised trial, the treatment effect is the main target and the other covariates are for precision and prognosis.
+:::
+
+## 2. Data, events and censoring
+
+```{r}
+pbc2 |> count(status = factor(status, 0:2, c("Censored (alive)", "Transplant", "Death")))
+```
+
+- Death is the event. **Transplant**: a competing event that removes patients from risk of dying *untreated*. We **censor at transplant** (`r sum(pbc2$status == 1)` patients). This is acceptable only if transplant is unrelated to prognosis, which is **doubtful** (sicker patients get transplants first): informative censoring. The competing-risk analysis (later in the course) addresses this.
+- Follow-up time is measured with the **reverse Kaplan–Meier** (event = censored):
+
+```{r}
+survfit(Surv(years, 1 - death) ~ 1, data = pbc2)
+```
+
+## Missing data, explicitly
+
+```{r}
+pbc2 |> select(trt, age, sex, edema, bili, albumin, protime, stage, copper) |>
+  summarise(across(everything(), \(x) sum(is.na(x)))) |>
+  pivot_longer(everything(), names_to = "variable", values_to = "n missing") |>
+  filter(`n missing` > 0)
+```
+
+- `copper` has many missing values: **dropped** from the model (not a choice made on p-values)
+- Among the randomised patients the covariates we use are **complete**: `r nrow(cc)` of `r nrow(pbc2)` patients (the 106 patients with missing `trt` were not randomised and are excluded by design). The complete-case step is therefore a formality here
+- Complete case analysis is valid if missingness is unrelated to outcome given covariates. With more missingness: multiple imputation (e.g. `mice`), not used here.
+- Always report the number of excluded patients and why.
+
+## Baseline table
+
+```{r}
+cc |>
+  select(trt, age, sex, edema, bili, albumin, protime, stage) |>
+  mutate(stage = factor(stage)) |>
+  gtsummary::tbl_summary(by = trt, statistic = list(gtsummary::all_continuous() ~ "{median} ({p25}, {p75})")) |>
+  gtsummary::add_overall()
+```
+
+Balanced between arms, as expected after randomisation. Bilirubin is skewed (median vs. quartiles).
+
+## 3. Kaplan–Meier and log-rank
+
+```{r}
+#| fig-height: 4.4
+survfit2(Surv(years, death) ~ trt, data = cc) |>
+  ggsurvfit() + add_risktable() +
+  labs(x = "Years since randomisation", y = "Overall survival") +
+  scale_y_continuous(limits = c(0, 1))
+```
+
+```{r}
+survdiff(Surv(years, death) ~ trt, data = cc)
+```
+
+```{r}
+#| include: false
+lr <- survdiff(Surv(years, death) ~ trt, data = cc)
+lr_p <- pchisq(lr$chisq, 1, lower.tail = FALSE)
+```
+
+Log-rank p = `r round(lr_p, 2)`: no evidence of a survival difference between arms, curves overlap.
+
+## 4. Univariable Cox models
+
+One covariate at a time: **screening**, and unadjusted HRs.
+
+```{r}
+uni <- function(f) {
+  m <- coxph(as.formula(paste("Surv(years, death) ~", f)), data = cc |> mutate(stage = factor(stage)))
+  broom::tidy(m, exponentiate = TRUE, conf.int = TRUE) |>
+    transmute(model = f, term, HR = round(estimate, 2),
+              lower = round(conf.low, 2), upper = round(conf.high, 2), p = signif(p.value, 2))
+}
+map_dfr(c("trt", "age", "sex", "edema", "log(bili)", "albumin", "log(protime)", "stage"), uni) |>
+  select(-model)
+```
+
+Most prognostic variables are clearly associated with death; treatment is not. Univariable results are confounded by each other (e.g. bilirubin, albumin and stage all reflect disease severity); do not select variables **only** by univariable p-values.
+
+## 5. Multivariable model
+
+Covariates chosen **a priori** on clinical grounds (known prognostic factors), plus treatment. Initial functional forms: age per 10 years, $\log(\text{bili})$, $\log(\text{protime})$, albumin linear.
+
+```{r}
+cc <- cc |> mutate(stage_f = factor(stage), age10 = age / 10)
+fit1 <- coxph(Surv(years, death) ~ trt + age10 + sex + edema + log(bili) + albumin +
+                log(protime) + stage_f, data = cc)
+broom::tidy(fit1, exponentiate = TRUE, conf.int = TRUE) |>
+  select(term, HR = estimate, conf.low, conf.high, p.value) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+## 6a. Check proportional hazards
+
+```{r}
+zph <- cox.zph(fit1)
+zph
+```
+
+```{r}
+#| include: false
+zt <- zph$table
+worst_zph <- rownames(zt)[which.min(zt[-nrow(zt), "p"])]
+```
+
+- Smallest p-value among the covariates: `r worst_zph` (p = `r signif(min(zt[-nrow(zt), "p"]), 2)`); global test p = `r signif(zt["GLOBAL", "p"], 2)`
+- With `r sum(cc$death)` events even modest departures are detectable: look at the **plots** and size of the effect, not only p-values
+
+## 6a. PH plots for the most suspicious terms
+
+```{r}
+#| fig-height: 4.4
+par(mfrow = c(1, 2), cex = 1.1)
+idx <- order(zt[-nrow(zt), "p"])[1:2]
+for (i in idx) plot(zph[i], resid = FALSE, main = rownames(zt)[i])
+```
+
+If the smooth coefficient drifts with time the effect changes over follow-up. Options (lecture 6): stratify on the variable, add a time interaction, or report an average effect with a caveat. The suspicious variables are **nuisance adjustments**; the treatment term shows no sign of non-PH (see the table). We keep the model and note it as a limitation.
+
+## 6b. Check functional form
+
+```{r}
+#| fig-height: 4.0
+fit_nobili <- coxph(Surv(years, death) ~ trt + age10 + sex + edema + albumin + log(protime) + stage_f, data = cc)
+cc$mart1 <- residuals(fit_nobili, type = "martingale")
+ggplot(cc, aes(albumin, mart1)) + geom_point(alpha = .5) +
+  geom_smooth(method = "loess", formula = y ~ x, se = FALSE) +
+  labs(x = "Albumin (g/dl)", y = "Martingale residual (model without albumin)")
+```
+
+Roughly linear for albumin. Bilirubin was handled in the first half (log scale, spline test). Likelihood-ratio test of a spline for albumin against the linear term:
+
+```{r}
+f_sp <- coxph(Surv(years, death) ~ trt + age10 + sex + edema + splines::ns(albumin, 3) + log(bili) +
+                log(protime) + stage_f, data = cc)
+anova(fit1, f_sp)
+```
+
+## 6c. Check influence
+
+```{r}
+#| fig-height: 4.2
+dbs <- residuals(fit1, type = "dfbetas")
+colnames(dbs) <- names(coef(fit1))
+as_tibble(dbs) |> mutate(row = row_number()) |>
+  select(row, trtD = `trtD-penicillamine`, `log(bili)`, albumin, age10) |>
+  pivot_longer(-row, names_to = "term", values_to = "dfbetas") |>
+  ggplot(aes(row, dfbetas)) + geom_segment(aes(xend = row, yend = 0)) +
+  facet_wrap(~ term) + labs(x = "Patient (row)", y = "dfbetas")
+```
+
+```{r}
+#| include: false
+mx <- apply(abs(dbs), 2, max)
+```
+
+Maximum $|\texttt{dfbetas}|$: treatment `r round(mx["trtD-penicillamine"], 2)`, $\log$(bili) `r round(mx["log(bili)"], 2)`, albumin `r round(mx["albumin"], 2)`. No single patient shifts a coefficient by more than a fraction of its standard error; we do not remove any patient.
+
+## 7. Final model
+
+Treatment is kept regardless of significance (randomised comparison). We test whether `log(protime)` is needed, to avoid noise variables.
+
+```{r}
+fit2 <- fit1   # final model
+fit_np <- coxph(Surv(years, death) ~ trt + age10 + sex + edema + log(bili) + albumin + stage_f, data = cc)
+anova(fit_np, fit2)
+```
+
+Adding `log(protime)`: LR p = `r signif(anova(fit_np, fit2)[2, "Pr(>|Chi|)"], 2)`, so we **keep** it, although it was also the weakest term in the PH check. The final model was chosen by clinical reasoning and checked; its apparent concordance is `r round(concordance(fit2)$concordance, 3)`.
+
+## Validate the final model
+
+```{r}
+f_fin_cph <- rms::cph(Surv(years, death) ~ trt + age10 + sex + edema + log(bili) + albumin + log(protime) + stage_f,
+                      data = cc, x = TRUE, y = TRUE)
+vf <- rms::validate(f_fin_cph, B = 200)
+vf[c("Dxy", "R2"), c("index.orig", "optimism", "index.corrected")]
+```
+
+```{r}
+#| include: false
+c_o <- 0.5 + vf["Dxy", "index.orig"] / 2; c_c <- 0.5 + vf["Dxy", "index.corrected"] / 2
+npar <- length(coef(fit2))
+```
+
+Apparent $C$ = `r round(c_o, 3)`, corrected $C$ = `r round(c_c, 3)`; `r sum(cc$death)` events for `r npar` parameters, about `r round(sum(cc$death) / npar, 1)` per parameter: acceptable.
+
+## 8a. Table of hazard ratios
+
+```{r}
+gtsummary::tbl_regression(fit2, exponentiate = TRUE,
+  label = list(age10 ~ "Age (per 10 years)", `log(bili)` ~ "log bilirubin",
+               albumin ~ "Albumin (per g/dl)", `log(protime)` ~ "log prothrombin time", stage_f ~ "Histologic stage"))
+```
+
+## 8b. Forest plot
+
+```{r}
+#| fig-height: 4.6
+broom::tidy(fit2, exponentiate = TRUE, conf.int = TRUE) |>
+  mutate(term = fct_rev(fct_inorder(term))) |>
+  ggplot(aes(estimate, term)) +
+  geom_vline(xintercept = 1, linetype = 2) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high)) +
+  scale_x_log10() +
+  labs(x = "Adjusted hazard ratio (95% CI), log scale", y = NULL)
+```
+
+## 8c. Adjusted survival curves
+
+Predicted survival for typical patients (treatment arms; other covariates fixed), using the final model:
+
+```{r}
+#| fig-height: 4.4
+nd <- tibble(trt = factor(c("Placebo", "D-penicillamine"), levels = levels(cc$trt)),
+             age10 = median(cc$age10), sex = "Female", edema = "None",
+             bili = median(cc$bili), albumin = median(cc$albumin),
+             protime = median(cc$protime), stage_f = "3") |>
+  mutate(sex = factor(sex, levels = levels(cc$sex)), edema = factor(edema, levels = levels(cc$edema)),
+         stage_f = factor(stage_f, levels = levels(cc$stage_f)))
+sf <- survfit(fit2, newdata = nd)
+sf_df <- tibble(time = rep(sf$time, 2), surv = c(sf$surv), arm = rep(nd$trt, each = length(sf$time)))
+ggplot(sf_df, aes(time, surv, colour = arm)) + geom_step(linewidth = 1) +
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(x = "Years since randomisation", y = "Adjusted survival", colour = NULL)
+```
+
+Female, median age, bilirubin and albumin, no oedema, median prothrombin time, stage 3. The curves are **conditional** on these values; the PH model forces them apart by a constant HR.
+
+## Another view: effect of bilirubin
+
+```{r}
+#| fig-height: 4.2
+nd2 <- tibble(trt = factor("Placebo", levels = levels(cc$trt)), age10 = median(cc$age10),
+              sex = factor("Female", levels = levels(cc$sex)),
+              edema = factor("None", levels = levels(cc$edema)),
+              bili = c(0.8, 1.4, 3.5), albumin = median(cc$albumin), protime = median(cc$protime),
+              stage_f = factor("3", levels = levels(cc$stage_f)))
+s2 <- survfit(fit2, newdata = nd2)
+tibble(time = rep(s2$time, 3), surv = c(s2$surv),
+       bili = factor(rep(nd2$bili, each = length(s2$time)))) |>
+  ggplot(aes(time, surv, colour = bili)) + geom_step(linewidth = 1) +
+  labs(x = "Years since randomisation", y = "Adjusted survival", colour = "Bilirubin (mg/dl)")
+```
+
+```{r}
+#| include: false
+hr_t <- summary(fit2)$conf.int["trtD-penicillamine", ]
+hr_b <- summary(fit2)$conf.int["log(bili)", ]
+hr_b2 <- exp(coef(fit2)["log(bili)"] * log(2))
+hr_a <- summary(fit2)$conf.int["albumin", ]
+```
+
+## 9. Interpretation (draft of a results paragraph)
+
+> Among `r nrow(cc)` randomised patients with complete data, `r sum(cc$death)` died during follow-up. After adjustment for age, sex, oedema, bilirubin, albumin, prothrombin time and histologic stage, the hazard ratio for D-penicillamine versus placebo was `r round(hr_t["exp(coef)"], 2)` (95% CI `r round(hr_t["lower .95"], 2)` to `r round(hr_t["upper .95"], 2)`), i.e. no evidence of a treatment effect on survival. Higher bilirubin was associated with higher mortality: the hazard ratio per doubling was `r round(hr_b2, 2)`. Each 1 g/dl higher albumin was associated with a hazard ratio of `r round(hr_a["exp(coef)"], 2)` (95% CI `r round(hr_a["lower .95"], 2)` to `r round(hr_a["upper .95"], 2)`).
+
+Note: HR of bilirubin per **doubling** = $\exp(\hat\beta \log 2)$, from the log-scale coefficient. HRs are **adjusted**, are relative (no absolute risk), and are **associations** for the prognostic factors, not causal effects.
+
+## Limitations to state
+
+- **Censoring at transplant** is probably informative (sicker patients transplanted earlier); consider a competing-risk analysis
+- Non-randomised patients (106) excluded; `copper` (many missing) not used; no imputation needed for the covariates used
+- **PH** holds only approximately; HR is an average over follow-up
+- Selection of variables and functional forms used the same data (some optimism); bootstrap corrects only part of it
+- Treatment effect estimate is imprecise: absence of evidence is **not** evidence of no effect. Look at the CI.
+- Old trial (1974-84); generalisation to current practice is uncertain
+
+# Wrap-up
+
+## In-class exercise (15 min)
+
+Use `survival::lung` (Stanford/NCCTG lung cancer; `status` 1 = censored, 2 = dead; `ph.karno`, `age`, `sex`, `wt.loss`).
+
+1. Recode the event (`status == 2`), fit `Surv(time, event) ~ age + sex + ph.karno + wt.loss` on complete cases.
+2. Compute `dfbetas`. Which patient has the largest influence on `wt.loss`? Refit without that patient and compare.
+3. Plot martingale residuals from a model without `age` against `age`. Is a linear term reasonable? Test a spline term with a likelihood-ratio test.
+4. Compute the concordance. Is it large or small? What does it not tell you?
+
+. . .
+
+*Discussion*: if one patient changes the HR from 1.10 (significant) to 1.05 (not significant), what do you report?
+
+## Quiz
+
+1. What does `dfbetas` $= -0.4$ for patient $i$ and covariate $j$ mean?
+2. Why is categorising a continuous covariate a poor default?
+3. A c-index of 0.75 says the model has good calibration. True or false?
+4. In a data set with 40 events, how many parameters should a prognostic model contain, roughly?
+
+## Take-home messages
+
+- **Influence**: use `dfbeta`/`dfbetas`; refit without the patient and report a sensitivity analysis. Do not delete data silently.
+- **Functional form**: martingale residual plot, then transformation ($\log$ for skewed labs) or splines; test non-linearity with a likelihood-ratio test. Avoid categorisation as default.
+- **Validation**: concordance measures ranking; use bootstrap (`rms::validate`) for optimism; count **events** per parameter.
+- **Workflow**: question, data/censoring/missing data, KM, univariable, multivariable, checks, final model, tables and figures, interpretation with limitations.
+- Always describe what was done with censoring and missing data.
+
+**Next lecture**: parametric survival models (Collett, Chapter 5).
+
+**Reading**: Collett, Chapter 4 (4.2.3 functional form, 4.3 influential observations, 4.5 recommendations).

@@ -1,0 +1,780 @@
+---
+title: "Lecture 11: Non-proportional Hazards and Institutional Comparisons"
+subtitle: "STA310 Survival Analysis · Collett Chapter 11"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+gastric <- read.table(file.path(data_dir, "Survival of patients with gastric cancer.dat"), header = TRUE)
+gastric$arm <- factor(gastric$treat, levels = 0:1, labels = c("Chemotherapy", "Chemo + radiation"))
+kidney <- read.table(file.path(data_dir, "Comparisons between kidney transplant centres.dat"), header = TRUE)
+kidney$centre <- factor(kidney$centre)
+
+# first day at which the radiation KM curve is back at or above the chemotherapy curve, after having been below
+km_g <- survfit(Surv(time, status) ~ treat, data = gastric)
+tgrid <- seq_len(max(gastric$time))
+sg <- summary(km_g, times = tgrid, extend = TRUE)$surv
+diff_km <- sg[length(tgrid) + tgrid] - sg[tgrid]
+first_neg <- which(diff_km < 0)[1]
+cross_day <- tgrid[first_neg - 1 + which(diff_km[first_neg:length(tgrid)] >= 0)[1]]
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. What non-proportional hazards look like
+2. Why a single hazard ratio can mislead
+3. Detecting non-PH (recap)
+4. Options: stratification, time-varying effects, RMST and milestone survival, weighted log-rank, AFT
+5. Institutional comparisons: case-mix adjustment, RAFR, funnel plots
+6. Exercise and take-home
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+You can
+
+- recognise and describe non-PH patterns
+- explain why the Cox HR is an average that depends on follow-up
+- choose among and fit alternatives to a single HR
+- compute and interpret RMST differences
+- compare institutions fairly, and know the limits of rankings
+:::
+:::
+
+## Recap
+
+- Cox model: $h(t \mid x) = h_0(t)\exp(\beta' x)$; the **hazard ratio is constant in time**
+- Checks: log-minus-log plots, scaled Schoenfeld residuals, `cox.zph()` (recap of lecture 6, with lecture 7)
+- Lecture 10: time-dependent covariates; **mechanics** of time-varying coefficients (`tt()`, $x\log t$) and of splitting follow-up (`survSplit()`) are explained there and only applied here
+- Immortal time bias (lecture 10) is a different problem from non-PH, but both come from treating something that happens during follow-up as fixed
+
+**Today's question**: what do we do when the PH assumption is clearly wrong, and the treatment effect is *not one number*?
+
+# What non-PH looks like
+
+## Five typical patterns
+
+```{r}
+#| echo: false
+#| fig-height: 5.2
+tt_ <- seq(0, 24, by = 0.25)
+mk <- function(pattern, h0, hr) tibble(pattern = pattern, t = tt_, Control = h0, Treatment = h0 * hr)
+pat <- bind_rows(
+  mk("Diverging", 0.05, 1 - 0.5 * tt_ / 24),
+  mk("Converging", 0.05, 0.4 + 0.6 * tt_ / 24),
+  tibble(pattern = "Crossing", t = tt_, Control = 0.05, Treatment = 0.09 - 0.003 * tt_),
+  mk("Delayed effect", 0.05, ifelse(tt_ < 6, 1, 0.5)),
+  mk("Waning effect", 0.05, ifelse(tt_ < 6, 0.5, pmin(1, 0.5 + 0.5 * (tt_ - 6) / 12)))
+) |>
+  pivot_longer(c(Control, Treatment), names_to = "Group", values_to = "hazard") |>
+  mutate(pattern = factor(pattern, levels = c("Diverging", "Converging", "Crossing", "Delayed effect", "Waning effect")))
+ggplot(pat, aes(t, hazard, colour = Group)) +
+  geom_line(linewidth = 1.1) +
+  facet_wrap(~pattern, nrow = 2) +
+  labs(x = "Time (months)", y = "Hazard h(t)") +
+  scale_y_continuous(limits = c(0, 0.1)) +
+  theme(legend.position = "bottom")
+```
+
+Stylised hazards. Only a constant ratio (a "parallel" pair on the log scale) satisfies PH.
+
+## Medical situations
+
+| Pattern | Typical situation |
+|---|---|
+| Diverging | Benefit builds up slowly, or a risk factor's impact grows with time |
+| Converging | Effect of a baseline factor (e.g. stage, performance status) fades as the high-risk patients die |
+| Crossing | Surgery vs medical therapy: early operative risk, later benefit (Collett Figure 11.1) |
+| Delayed effect | Immuno-oncology: the immune system needs months to respond; curves overlap initially |
+| Wane of effect | Vaccine protection, or a drug effect that disappears after stopping treatment |
+
+. . .
+
+::: {.callout-note}
+In all five, "the hazard ratio" is a function $HR(t)$, not a number.
+:::
+
+## Delayed effect: what the survival curves look like
+
+```{r}
+#| echo: false
+#| fig-height: 4.3
+dd <- tibble(t = seq(0, 36, by = 0.25)) |>
+  mutate(Control = exp(-0.1 * t),
+         Treatment = ifelse(t < 6, exp(-0.1 * t), exp(-0.6 - 0.05 * (t - 6)))) |>
+  pivot_longer(-t, names_to = "Group", values_to = "S")
+ggplot(dd, aes(t, S, colour = Group)) + geom_line(linewidth = 1.1) +
+  labs(x = "Months", y = "Survival probability") + ylim(0, 1)
+```
+
+Same hazard $0.10$/month for 6 months; afterwards $0.05$ in the treatment arm (true $HR = 0.5$ after month 6).
+
+## Why it matters: the Cox HR is an average
+
+Under non-PH, the partial likelihood still gives an estimate $\hat\beta$, but it estimates a **weighted average of $\log HR(t)$**, where the weights depend on
+
+- the number of events at each time (so on the **follow-up** and **censoring** pattern),
+- the risk-set sizes.
+
+So the "average HR" is **not a property of the treatment alone**: the same drug, studied with longer follow-up or different censoring, gives a different number.
+
+. . .
+
+Collett (Fig. 11.4, with Fig. 11.3 for strata): fitting a PH model to hazards that cross or diverge gives fitted hazards that describe neither phase of the effect.
+
+## Simulation: delayed effect, different follow-up
+
+True hazard ratio: $1$ for $t<6$ months, $0.5$ afterwards. Administrative censoring at different times.
+
+```{r}
+sim_delay <- function(n = 4000, followup) {
+  e <- rexp(2 * n)
+  grp <- rep(0:1, each = n)
+  t <- ifelse(grp == 0, e / 0.1,
+              ifelse(e < 0.6, e / 0.1, 6 + (e - 0.6) / 0.05))
+  d <- data.frame(grp, time = pmin(t, followup), status = as.integer(t <= followup))
+  fit <- coxph(Surv(time, status) ~ grp, data = d)
+  c(followup = followup, HR = unname(exp(coef(fit))), events = sum(d$status))
+}
+res <- map_dfr(c(6, 12, 24, 48), \(f) as.list(sim_delay(followup = f)))
+res |> mutate(HR = round(HR, 2))
+```
+
+. . .
+
+The estimated HR moves from about `r round(res$HR[1], 2)` (follow-up 6 months) to `r round(res$HR[4], 2)` (48 months), but it stays far from the true late HR of 0.5 even after 48 months. A single HR is a statement about the *trial*, not only the *drug*.
+
+## Why it matters: three consequences
+
+1. **Interpretation**: "HR = 0.7" has no clear meaning.
+2. **Power**: the log-rank test loses power for late or crossing differences (for crossing curves it may be near zero).
+3. **Generalisability**: results depend on follow-up, censoring and recruitment pattern.
+
+. . .
+
+::: {.callout-important}
+Non-PH is not a nuisance to be "fixed" by a test. It is **a finding about the treatment**: *when* the effect happens is clinically relevant.
+:::
+
+# Detecting non-PH
+
+## Example: gastric cancer trial (Collett Example 11.2)
+
+Gastrointestinal Tumor Study Group: chemotherapy (`treat = 0`) vs chemotherapy + radiation (`treat = 1`)^[Collett defines X = 0 for chemotherapy alone and X = 1 for the combined treatment (Section 11.2), which is what the labels use.], survival in days, n = `r nrow(gastric)`.
+
+```{r}
+#| fig-height: 4.3
+#| output-location: column
+survfit2(Surv(time, status) ~ arm, data = gastric) |>
+  ggsurvfit() +
+  add_risktable() +
+  labs(x = "Days", y = "Survival probability")
+```
+
+. . .
+
+The KM curves cross at about day `r cross_day` (first day where the radiation curve is back at or above the chemotherapy curve). Radiation has **more early deaths** and a **better long-term outlook**. Note that this is not the same as the day where the *hazard ratio* crosses 1, which comes earlier (see the `tt()` fit below).
+
+## Checking the data coding
+
+```{r}
+table(gastric$arm, gastric$status, dnn = c("arm", "status (1 = death)"))
+summary(gastric$time)
+```
+
+`r sum(gastric$status == 1)` of `r nrow(gastric)` patients died: heavily observed, with few censored (`r sum(gastric$status == 0)`). Follow-up reaches `r max(gastric$time)` days, but very few patients are at risk beyond about 1000 days.
+
+## Detecting: log-minus-log plot
+
+```{r}
+#| fig-height: 4.3
+survfit2(Surv(time, status) ~ arm, data = gastric) |>
+  ggsurvfit(type = "cloglog") +
+  labs(x = "Days (log scale)", y = "log(-log S(t))") +
+  scale_x_log10()
+```
+
+Under PH the two curves are **parallel**. Here they cross.
+
+## Detecting: `cox.zph` (recap of lecture 6)
+
+```{r}
+fit_g <- coxph(Surv(time, status) ~ treat, data = gastric)
+cz <- cox.zph(fit_g, transform = "km")
+cz
+```
+
+. . .
+
+With `transform = "km"`, the test of a zero slope of the scaled Schoenfeld residuals against time gives $p =$ `r format.pval(cz$table["treat", "p"], digits = 2)`: evidence against PH.
+
+## Schoenfeld plot
+
+```{r}
+#| fig-height: 4.5
+plot(cz, resid = TRUE, xlab = "Time (KM transform)", ylab = "beta(t) for treat")
+abline(h = coef(fit_g), lty = 2, col = "red")
+```
+
+The smooth is an estimate of $\beta(t)$: positive (harm) early, negative later. The dashed line is the single Cox estimate.
+
+::: {.callout-warning}
+`cox.zph` has low power with few events and tests only one particular form of departure. **Look at the plot** and think about the mechanism.
+:::
+
+## A second example: `veteran` (lung cancer trial)
+
+```{r}
+fit_v <- coxph(Surv(time, status) ~ trt + karno + age + celltype, data = veteran)
+cox.zph(fit_v)
+```
+
+The Karnofsky score (performance status) shows non-PH (and `celltype` also departs from PH, which is why it is stratified below in Option 1). Illustration of the "converging" pattern: the prognostic value of a baseline score fades with time as the sickest patients die.
+
+## Veteran: the effect of `karno` over time
+
+```{r}
+#| fig-height: 4.5
+plot(cox.zph(fit_v)[2], xlab = "Time (days, KM scale)", ylab = "beta(t) for karno")
+abline(h = 0, lty = 3)
+```
+
+The coefficient is clearly negative early (higher score, lower hazard) and moves towards 0 later.
+
+# Options for analysis
+
+## Roadmap
+
+```{mermaid}
+%%| fig-width: 9
+flowchart LR
+  A[Non-PH found] --> B{Nuisance variable<br/>or effect of interest?}
+  B -->|Nuisance| C[1. Stratify]
+  B -->|Of interest| D[2. Time-varying effect]
+  B -->|Of interest| E[3. RMST / milestone survival]
+  B -->|Test only| F[4. Weighted log-rank]
+  B -->|Different scale| G[5. AFT]
+```
+
+## Option 1: stratification
+
+If the non-PH variable is a **nuisance** (a confounder, a centre), let it have its own baseline hazard:
+
+$$h_j(t \mid x) = h_{0j}(t)\exp(\beta' x), \quad j = 1,\dots,J$$
+
+```{r}
+fit_vs <- coxph(Surv(time, status) ~ trt + karno + age + strata(celltype), data = veteran)
+broom::tidy(fit_vs, exponentiate = TRUE, conf.int = TRUE) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+- No HR is estimated for `celltype`, and it cannot be tested
+- Remaining covariates still need PH, and **same $\beta$** across strata is assumed
+- Useless if the non-PH variable is the **treatment** of interest
+
+## Option 2a: piecewise Cox (step function HR)
+
+Assume PH within time intervals, with a different HR in each (Collett Eq. 11.3; mechanics of `survSplit()`: Lecture 10). Cut points as in Collett: 360, 720, 1080 days.
+
+```{r}
+cuts <- c(360, 720, 1080)
+gs <- survSplit(Surv(time, status) ~ ., data = gastric, cut = cuts, episode = "interval")
+gs$interval <- factor(gs$interval, labels = c("0-360", "361-720", "721-1080", ">1080"))
+head(gs[, c("patient", "tstart", "time", "status", "treat", "interval")], 5)
+table(gs$interval, gs$status)
+```
+
+Events per interval are few after day 720.
+
+## Piecewise Cox: interval-specific HRs
+
+```{r}
+fit_pw <- coxph(Surv(tstart, time, status) ~ treat:interval, data = gs)
+pw <- broom::tidy(fit_pw, exponentiate = TRUE, conf.int = TRUE) |>
+  mutate(term = str_remove(term, "treat:interval")) |>
+  select(interval = term, HR = estimate, conf.low, conf.high)
+pw |> mutate(across(where(is.numeric), \(x) round(x, 2)))
+```
+
+. . .
+
+Interpretation: in the first year, radiation is associated with a hazard `r round(pw$HR[1], 2)` times that of chemotherapy (95% CI `r round(pw$conf.low[1], 2)` to `r round(pw$conf.high[1], 2)`), i.e. higher mortality. In later intervals the estimated HR is below 1, but with wide intervals (few events). These agree with Collett Table 11.3.
+
+## Test for PH using the piecewise model
+
+Compare the model with one common $\beta$ to the interval-specific model:
+
+```{r}
+fit_common <- coxph(Surv(tstart, time, status) ~ treat, data = gs)
+anova(fit_common, fit_pw)
+```
+
+The likelihood ratio test (3 df) is the formal test of "same HR in all intervals" for these cut points.
+
+::: {.callout-warning}
+Cut points should be chosen **before** looking at the data, or based on clinical reasoning (e.g. "first year"). Data-driven cut points inflate type I error and make the intervals look more convincing than they are.
+:::
+
+## Option 2b: HR as a function of time with `tt()`
+
+Application of the time-varying coefficient $\beta(t) = \beta_0 + \beta_1 g(t)$, $g(t)=\log t$ (mechanics: Lecture 10), giving $HR(t) = \exp\{\beta_0 + \beta_1 \log t\}$.
+
+```{r}
+fit_tt <- coxph(Surv(time, status) ~ treat + tt(treat), data = gastric,
+                tt = function(x, t, ...) x * log(t))
+fit_tt
+```
+
+. . .
+
+`tt(treat)` is $\beta_1$; its estimate is `r round(coef(fit_tt)[2], 2)`, so the HR decreases with time (smooth monotone curve, 2 parameters).
+
+## Plot the fitted $HR(t)$
+
+```{r}
+#| fig-height: 4.5
+b <- coef(fit_tt); V <- vcov(fit_tt)
+tg <- seq(10, 1000, by = 5)
+X <- cbind(1, log(tg))
+est <- drop(X %*% b); se <- sqrt(rowSums((X %*% V) * X))
+ggplot(tibble(t = tg, hr = exp(est), lo = exp(est - 1.96 * se), hi = exp(est + 1.96 * se)),
+       aes(t, hr)) +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.2) + geom_line(linewidth = 1) +
+  geom_hline(yintercept = 1, linetype = 2) + scale_y_log10() +
+  labs(x = "Days", y = "Hazard ratio (radiation vs chemo), log scale")
+```
+
+HR is above 1 early and crosses 1 around day `r round(exp(-b[1] / b[2]))`. The band is wide: the function is estimated from `r sum(gastric$status)` events.
+
+## Splines, and a warning
+
+- More flexibility: other choices of $g(t)$ (Lecture 10)
+- `rms`, `flexsurv` and Royston-Parmar models (Collett Section 6.4) allow treatment-by-time interactions in the baseline spline
+- **Caution**: the model is only as good as the assumed functional form (here $\log t$); predictions from `tt()` models need care (Lecture 10)
+
+. . .
+
+::: {.callout-tip}
+Piecewise HRs are easy to explain to clinicians. Smooth $\beta(t)$ is more efficient. Report one, and say that the other was a sensitivity analysis.
+:::
+
+## Option 3: a summary that does not need PH
+
+Instead of modelling the hazard, **summarise the survival curves** directly:
+
+- **Milestone survival**: $S(t^*)$, difference $\hat S_1(t^*) - \hat S_0(t^*)$ at a fixed time $t^*$
+- **Restricted mean survival time**:
+$$\text{RMST}(\tau) = E\{\min(T,\tau)\} = \int_0^\tau S(u)\,du$$
+the area under the survival curve up to $\tau$: *average event-free time within the first $\tau$ days*.
+
+Treatment effect: $\widehat{\text{RMST}}_1(\tau) - \widehat{\text{RMST}}_0(\tau)$, in days (or months) gained or lost.
+
+- Needs no PH assumption, valid for crossing curves
+- Collett Section 11.3
+
+## RMST as an area
+
+```{r}
+#| echo: false
+#| fig-height: 4.6
+tau <- 400
+fs <- survfit(Surv(time, status) ~ arm, data = gastric)
+sd_ <- tibble(t = fs$time, S = fs$surv, arm = rep(names(fs$strata), fs$strata)) |>
+  mutate(arm = str_remove(arm, "arm="))
+sd_ <- bind_rows(sd_, tibble(t = 0, S = 1, arm = unique(sd_$arm))) |> arrange(arm, t) |> filter(t <= tau)
+ends <- sd_ |> group_by(arm) |> slice_tail(n = 1) |> mutate(t = tau)
+sd_ <- bind_rows(sd_, ends)
+ggplot(sd_, aes(t, S, colour = arm, fill = arm)) +
+  geom_area(position = "identity", alpha = 0.15, stat = "identity", direction = "hv", outline.type = "upper") +
+  geom_step(linewidth = 1) +
+  labs(x = "Days", y = "Survival probability", colour = NULL, fill = NULL) +
+  theme(legend.position = "bottom")
+```
+
+Shaded area up to $\tau = 400$ days = RMST. The gap between the areas is the difference in RMST.
+
+## RMST in R: from `survfit`
+
+```{r}
+fit_km <- survfit(Surv(time, status) ~ arm, data = gastric)
+print(fit_km, rmean = 400)
+```
+
+`rmean*` is the area under each KM curve up to $\tau=400$ days, with its standard error.
+
+. . .
+
+```{r}
+tab <- summary(fit_km, rmean = 400)$table
+mu <- tab[, "rmean"]; se <- tab[, "se(rmean)"]
+d <- unname(mu[2] - mu[1]); sed <- sqrt(sum(se^2))
+round(c(diff = d, lower = d - 1.96 * sed, upper = d + 1.96 * sed,
+        z = d / sed, p = 2 * pnorm(-abs(d / sed))), 3)
+```
+
+## Interpreting the RMST difference
+
+Over the first 400 days, patients on chemotherapy alone lived on average `r round(mu[1])` days, and patients on chemo + radiation `r round(mu[2])` days. The difference (radiation minus chemotherapy) is `r round(d)` days (95% CI `r round(d - 1.96 * sed)` to `r round(d + 1.96 * sed)`), $p =$ `r format.pval(2 * pnorm(-abs(d / sed)), digits = 2)`.
+
+. . .
+
+- Plain scale: **days of life gained or lost within 400 days**
+- The estimate is *not* a "hazard ratio" and is not meant to be: it describes the first 400 days only
+- Independent (non-informative) censoring is still required
+- Dedicated packages exist on CRAN (e.g. `survRM2`), but are not used here
+
+::: {.callout-note}
+Same `se` formula as Collett p. 340: the RMST is the integral of $\hat S$, with a variance derived from the Greenwood-type formula.
+:::
+
+## Milestone survival
+
+```{r}
+ms <- summary(fit_km, times = c(200, 400, 800))
+tibble(arm = ms$strata, time = ms$time, S = ms$surv, se = ms$std.err,
+       lower = ms$lower, upper = ms$upper) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+Difference at a time $t^*$: $\hat S_1 - \hat S_0$ with $SE = \sqrt{SE_1^2 + SE_0^2}$ (independent groups).
+
+```{r}
+m <- tibble(time = ms$time, S = ms$surv, se = ms$std.err, g = as.character(ms$strata)) |>
+  pivot_wider(names_from = g, values_from = c(S, se)) |>
+  mutate(diff = `S_arm=Chemo + radiation` - `S_arm=Chemotherapy`,
+         se_diff = sqrt(`se_arm=Chemo + radiation`^2 + `se_arm=Chemotherapy`^2),
+         z = diff / se_diff)
+m |> select(time, diff, se_diff, z) |> mutate(across(everything(), \(x) round(x, 3)))
+```
+
+Early on radiation is *worse* (200 and 400 days, $z<0$); by 800 days the survival probabilities are nearly equal (`r round(m$diff[3], 3)`). The gap between the curves changes with time, which a single summary over all times would hide.
+
+## Choice of $\tau$
+
+- RMST depends on $\tau$; **fix it in the protocol**, not after seeing the curves
+- Must satisfy $\tau \le$ the smaller of the largest observation times in the groups; and the KM curve must be stable there (enough patients at risk)
+- Common rules: the time where at least 10-20% of patients are still at risk in each arm; a clinically meaningful horizon (e.g. 1, 2 or 5 years)
+
+```{r}
+taus <- c(200, 400, 600, 800)
+map_dfr(taus, \(tau) {
+  tb <- summary(fit_km, rmean = tau)$table
+  dd <- unname(tb[2, "rmean"] - tb[1, "rmean"]); s <- sqrt(sum(tb[, "se(rmean)"]^2))
+  tibble(tau = tau, rmst_chemo = tb[1, "rmean"], rmst_radiation = tb[2, "rmean"],
+         diff = dd, se = s, z = dd / s)
+}) |> mutate(across(everything(), \(x) round(x, 2)))
+```
+
+The RMST difference is negative for every $\tau$ here, but its size and $z$-value **depend on $\tau$** (the area keeps accumulating the early deficit). Honest reporting fixes $\tau$ in advance, shows a few horizons as sensitivity, and shows the full curves.
+
+## Option 4: weighted log-rank tests (recap lecture 3)
+
+Fleming-Harrington $G^{\rho,\gamma}$: weight $w(t) = \hat S(t-)^\rho\{1-\hat S(t-)\}^\gamma$
+
+| $(\rho,\gamma)$ | Emphasis |
+|---|---|
+| (0, 0) | log-rank, equal weight, best under PH |
+| (1, 0) | early differences (Peto-Peto type) |
+| (0, 1) | **late** differences, used for delayed effects |
+
+```{r}
+survdiff(Surv(time, status) ~ arm, data = gastric, rho = 0)
+survdiff(Surv(time, status) ~ arm, data = gastric, rho = 1)
+```
+
+`survdiff()` only offers $G^{\rho,0}$. For $\gamma>0$ other packages exist on CRAN; they are not used here.
+
+## Weighted log-rank: caveats
+
+- Gives a **p-value**, not an effect size; no CI for a treatment effect
+- The weight must be **pre-specified**. Choosing $\rho,\gamma$ after seeing the plots is cherry-picking
+- With crossing curves the early and late differences partly cancel, so ordinary log-rank has low power. A *max-combo* test (several weights, adjust for multiplicity) is a robust compromise
+- Pair a weighted test with a descriptive measure (RMST, milestone survival)
+
+::: {.callout-tip}
+Typical analysis plan in a delayed-effect trial: log-rank (or max-combo) as primary test, RMST difference as the effect estimate.
+:::
+
+## Option 5: AFT models
+
+Accelerated failure time (lecture 8): $\log T = \mu + \alpha' x + \sigma\varepsilon$. Effects are **time ratios**, not hazard ratios.
+
+- Weibull with a **common** shape is both PH and AFT, so it cannot fit crossing curves
+- Log-logistic: hazards *converge* (non-PH) and the model has proportional odds
+- Allowing a **different scale** per group gives different shapes, so hazards may cross
+
+```{r}
+fit_w <- survreg(Surv(time, status) ~ treat + strata(treat), data = gastric, dist = "weibull")
+fit_w
+```
+
+. . .
+
+The scale parameters differ between arms (strata `treat=0` and `treat=1`), so the fitted hazards are non-proportional and can cross. Time ratios then depend on the quantile of interest: again no single number.
+
+## Which option when?
+
+| Aim | Suggested approach |
+|---|---|
+| Non-PH covariate is a nuisance | Stratify |
+| Describe how the effect changes with time | Piecewise HR or $\beta(t)$ via `tt()` |
+| One interpretable effect summary | RMST difference / milestone survival (pre-specify $\tau$) |
+| Test with expected delayed effect | Weighted log-rank / max-combo |
+| Parametric extrapolation, covariates | Flexible parametric or AFT models |
+
+. . .
+
+Always: plot the KM curves with risk table first.
+
+# Institutional comparisons
+
+## Comparing hospitals and centres
+
+Medical question: **do transplant centres (hospitals, surgeons) differ in outcome after taking account of patient mix?**
+
+- Registries and regulators publish "performance indicators", e.g. risk-adjusted mortality
+- Centres treat different patients: older donors, diabetics, long cold ischaemic times...
+- Raw outcomes mix **quality of care** with **case mix**
+
+Goal: compare each centre with what would be expected **if its patients had been treated at an average centre**.
+
+Collett Section 11.4; the same methods apply to schools, surgeons, or financial providers.
+
+## Data: UK kidney transplant centres
+
+Transplants from deceased donors in 8 centres (2009-2011), follow-up to December 2012.
+
+```{r}
+head(kidney, 4)
+table(kidney$tcens)
+```
+
+By the chapter's data description: `tsurv` = transplant survival time (days), `tcens` = **event indicator** (1 = transplant failure, 0 = censored; the name is misleading). Check: `r sum(kidney$tcens)` events among `r nrow(kidney)` patients, `r sum(kidney$tsurv == 0)` with `tsurv = 0` (graft never functioned).
+
+## Raw one-year failure by centre
+
+```{r}
+#| fig-height: 4.3
+survfit2(Surv(tsurv, tcens) ~ centre, data = kidney) |>
+  ggsurvfit() +
+  labs(x = "Days since transplant", y = "Transplant survival") +
+  scale_y_continuous(limits = c(0.6, 1)) +
+  coord_cartesian(xlim = c(0, 1460))
+```
+
+Unadjusted curves differ somewhat. Is it the centre, or the patients?
+
+## Case mix differs between centres
+
+```{r}
+kidney |>
+  group_by(centre) |>
+  summarise(n = n(), events = sum(tcens), donor_age = mean(dage), DCD = mean(dtype),
+            recip_age = mean(rage), diabetic = mean(diab), CIT = mean(cit)) |>
+  mutate(across(where(is.numeric) & !c(n, events), \(x) round(x, 2)))
+```
+
+Donor age, donor type, cold ischaemic time vary across centres: a centre receiving riskier organs will look worse.
+
+## Step 1: the risk-adjustment model
+
+Fit a Cox model with **patient-level** risk factors, *without* centre, to all centres combined:
+
+```{r}
+fit_ra <- coxph(Surv(tsurv, tcens) ~ dage + dtype + rage + diab + cit, data = kidney)
+broom::tidy(fit_ra, exponentiate = TRUE, conf.int = TRUE) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+Our coefficient for `dage` is `r round(coef(fit_ra)["dage"], 3)` per year (Collett reports 0.023 in the fitted risk score, Section 11.4): HR per 10 years of donor age is about `r round(exp(10 * coef(fit_ra)["dage"]), 2)`.
+
+## Direct approach: centre as a covariate
+
+Add centre as a factor, adjusted for case mix:
+
+```{r}
+fit_c <- coxph(Surv(tsurv, tcens) ~ centre + dage + dtype + rage + diab + cit, data = kidney)
+broom::tidy(fit_c, exponentiate = TRUE, conf.int = TRUE) |>
+  filter(str_detect(term, "centre")) |>
+  mutate(across(where(is.numeric), \(x) round(x, 2)))
+```
+
+HRs are relative to **centre 1**, an arbitrary reference. Centre 8 has HR `r round(exp(coef(fit_c)["centre8"]), 2)`, but all intervals are fairly wide.
+
+```{r}
+anova(fit_ra, fit_c)
+```
+
+The likelihood-ratio test for "no centre effect" has $p =$ `r signif(anova(fit_ra, fit_c)[2, "Pr(>|Chi|)"], 2)`.
+
+## Cox with centre factor: pros and cons
+
+- Simple, adjusted HRs with CIs
+- Assumes PH of centre effects and that the covariate effects are the same in all centres
+- Comparison with an **arbitrary reference centre**, not with "average performance"
+- Alternative: **stratify by centre**, `strata(centre)`, to let baseline hazards differ, and estimate case-mix coefficients within centre; but then no centre effect is estimated
+
+```{r}
+coef(coxph(Surv(tsurv, tcens) ~ strata(centre) + dage + dtype + rage + diab + cit, data = kidney)) |>
+  round(3)
+```
+
+Case-mix coefficients are similar to the pooled model above, which supports the use of a common risk model.
+
+## Step 2: observed vs expected failures at one year
+
+For each patient $i$ in centre $j$, expected failures to time $\min(t_i, 365)$ is the estimated cumulative hazard $\hat H_{ij}$ (Collett Eq. 11.8):
+
+$$e_j = \sum_{i \in j} \hat H_{ij}(\min(t_i, 365)) = \sum_{i \in j} \hat H_0(\min(t_i,365))\, e^{\hat\eta_i}$$
+
+```{r}
+bh <- basehaz(fit_ra, centered = FALSE)
+H0 <- stepfun(bh$time, c(0, bh$hazard))
+lp <- predict(fit_ra, type = "lp", reference = "zero")
+kidney$expected <- H0(pmin(kidney$tsurv, 365)) * exp(lp)
+kidney$obs1y <- as.integer(kidney$tcens == 1 & kidney$tsurv <= 365)
+oe <- kidney |> group_by(centre) |>
+  summarise(n = n(), observed = sum(obs1y), expected = sum(expected))
+oe |> mutate(`O/E` = observed / expected) |> mutate(across(where(is.numeric), \(x) round(x, 2)))
+```
+
+The model-based totals (Collett Table 11.6: centre 1, 23 observed and 28.96 expected) agree closely.
+
+## Step 3: risk-adjusted failure rate (RAFR)
+
+$$\text{RAFR}_j = \frac{\text{observed}_j}{\text{expected}_j} \times \text{overall failure rate}$$
+
+```{r}
+overall <- 1 - summary(survfit(Surv(tsurv, tcens) ~ 1, data = kidney), times = 365)$surv
+oe <- oe |>
+  mutate(RAFR = observed / expected * overall,
+         lower = qgamma(0.025, observed) / expected * overall,
+         upper = qgamma(0.975, observed + 1) / expected * overall)
+oe |> select(centre, observed, expected, RAFR, lower, upper) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+Overall one-year failure rate: `r round(overall, 3)`. Intervals use the exact Poisson limits (Collett Section 11.4.1); they should resemble Collett Table 11.7.
+
+## Caterpillar plot
+
+```{r}
+#| fig-height: 4.3
+ggplot(oe, aes(reorder(centre, RAFR), RAFR)) +
+  geom_pointrange(aes(ymin = lower, ymax = upper)) +
+  geom_hline(yintercept = overall, linetype = 2) +
+  labs(x = "Centre (ordered by RAFR)", y = "Risk-adjusted 1-year failure rate")
+```
+
+Dashed: overall failure rate. Only centre 8 has an interval clearly above it; the other centres cannot be told apart reliably.
+
+## RAFR and the Poisson model (pointer)
+
+Collett (Section 11.4.2) shows the same estimates from a Poisson regression with offset $\log\{e_j/\text{overall rate}\}$ and one parameter per centre:
+
+$$\log \mu_j = c_j + \log\{e_j / \text{overall rate}\}, \qquad \text{RAFR}_j = \exp(\hat c_j)$$
+
+- With $J$ centres and $J$ parameters, the fit is perfect; the model only provides a convenient way to get the CIs
+- Equivalent to a **standardised ratio** $O_j/E_j$ (SMR-type), rescaled to the overall rate
+
+## Funnel plot
+
+Idea: plot $O_j/E_j$ against a precision measure ($E_j$). Under "no centre effect", $O_j \sim \text{Poisson}(E_j)$, so the scatter should lie inside **control limits** that narrow as $E_j$ grows.
+
+```{r}
+#| fig-height: 4.3
+E <- seq(8, 32, by = 0.5)
+lim <- tibble(E = E,
+              lo95 = qpois(0.025, E) / E, hi95 = qpois(0.975, E) / E,
+              lo998 = qpois(0.001, E) / E, hi998 = qpois(0.999, E) / E)
+ggplot(oe, aes(expected, observed / expected)) +
+  geom_line(data = lim, aes(E, lo95), linetype = 2) + geom_line(data = lim, aes(E, hi95), linetype = 2) +
+  geom_line(data = lim, aes(E, lo998)) + geom_line(data = lim, aes(E, hi998)) +
+  geom_hline(yintercept = 1, colour = "grey50") +
+  geom_point(size = 3) + geom_text(aes(label = centre), nudge_x = 0.6, size = 5) +
+  labs(x = "Expected failures at 1 year", y = "Observed / expected")
+```
+
+Dashed: approx. 95%; solid: approx. 99.8% limits. Large centres are held to a stricter standard than small ones.
+
+## Cautions about ranking institutions
+
+- **League tables over-interpret noise**: with 8 centres there is always a "best" and a "worst"
+- Ranks are very uncertain; an interval for the *rank* is usually wide
+- Multiple comparisons: with many institutions, some will fall outside 95% limits by chance (use 99.8% limits, or shrinkage)
+- Risk adjustment only removes **measured** case mix (residual confounding, e.g. selection of patients, unmeasured frailty)
+- Small centres have unstable estimates
+- Over-dispersion: true differences between centres make limits too narrow
+- Gaming: centres may avoid high-risk patients
+
+. . .
+
+::: {.callout-warning}
+"Centre X is an outlier" is a reason to *investigate*, not a verdict on quality.
+:::
+
+## Pointer: random institution effects
+
+- With **many** institutions, fixed centre effects are noisy
+- Treat institution effects as random: a **shared frailty** model $h_{ij}(t) = z_j h_0(t) e^{\beta' x_{ij}}$ with $z_j$ gamma distributed; estimates are shrunk towards the overall mean (Collett Section 11.4.3); unobserved heterogeneity between institutions is the motivation
+- Frailty models: **Lecture 15**
+
+## Non-PH in institutional comparisons
+
+- A centre effect may be larger early (surgical complications) than late
+- Check PH for the centre factor:
+
+```{r}
+cox.zph(fit_c, terms = TRUE)
+```
+
+- Here `cox.zph` gives $p =$ `r format.pval(cox.zph(fit_c, terms = TRUE)$table["centre", "p"], digits = 2)` for the centre factor: some evidence that centre differences change with time, though with 8 levels the power is spread and the test is crude
+- The **fixed-time** RAFR at one year is itself a milestone-survival summary and does not need PH for the centre effect, but it needs a risk model that fits to 365 days
+
+# Exercise and take-home
+
+## In-class exercise (10 min)
+
+Using the `gastric` data:
+
+1. Compute the RMST for each arm with $\tau = 600$ days and the difference with 95% CI.
+2. Compute survival at 600 days in each arm. Do the two summaries tell the same story?
+3. Run `survdiff()` with `rho = 0` and `rho = 1`. Why might they differ for these data?
+4. Which analysis would you pre-specify in a trial protocol if you expected crossing curves from earlier trials? Why?
+
+*Extra*: In the kidney data, repeat the RAFR calculation at **two years** (730 days). Do the centre conclusions change?
+
+## Quiz
+
+Which statements are true?
+
+a. The Cox HR under non-PH is the same however long the follow-up is.
+b. RMST requires the proportional hazards assumption.
+c. Stratifying by centre estimates a hazard ratio for each centre.
+d. If cox.zph gives $p>0.05$, PH holds.
+
+. . .
+
+All four are **false**: (a) it depends on the censoring pattern; (b) it does not; (c) stratified models give no centre effects; (d) absence of evidence is not evidence of absence (low power).
+
+## Take-home messages
+
+- Non-PH (diverging, converging, crossing, delayed, waning) means the HR is a **function of time**; a single Cox HR is a follow-up-dependent average
+- Detect with KM plots, log-minus-log plots, Schoenfeld plots and `cox.zph()`, but think about the **mechanism**
+- Options: **stratify** (nuisance), **piecewise / `tt()`** (describe $HR(t)$), **RMST and milestone survival** (assumption-light summaries; choose $\tau$ in advance), **weighted log-rank** (test), **AFT**
+- Institutional comparisons: adjust for case mix with a Cox model, compare **observed to expected** failures (RAFR), show uncertainty (funnel plot); rankings are fragile
+- Random institution effects: frailty models, Lecture 15
+
+**Next lecture**: competing risks (Collett Chapter 12)
+
+**Reading**: Collett, Chapter 11 (Sections 11.1-11.4; for 11.3.1, pseudo-values, see the chapter if interested)

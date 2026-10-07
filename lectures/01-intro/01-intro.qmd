@@ -1,0 +1,454 @@
+---
+title: "Lecture 1: Introduction to Survival Analysis"
+subtitle: "STA310 Survival Analysis · Collett Chapter 1"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+iud <- read.table(file.path(data_dir, "Time to discontinuation of the use of an IUD.dat"), header = TRUE)
+breast <- read.table(file.path(data_dir, "Prognosis for women with breast cancer.dat"), header = TRUE)
+breast$stain <- factor(breast$stain, levels = 1:2, labels = c("Negative", "Positive"))
+myeloma <- read.table(file.path(data_dir, "Survival of multiple myeloma patients.dat"), header = TRUE)
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. What is survival analysis?
+2. Examples from medicine
+3. Censoring
+4. Time scales and the independence assumption
+5. Describing survival: $S(t)$, $h(t)$, $H(t)$
+6. How they relate, and summary measures
+7. Roadmap for the course
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+After today you can
+
+- define time-to-event data and explain why censoring needs special methods
+- set up survival data in R with `Surv()`
+- interpret and relate the survivor, hazard and cumulative hazard functions
+:::
+:::
+
+# What is survival analysis?
+
+## Time-to-event data
+
+**Survival analysis** = methods for the time from a well-defined *origin* until a well-defined *event*.
+
+| Origin | Event | Field |
+|---|---|---|
+| Diagnosis of cancer | Death | Oncology |
+| Surgery / transplantation | Graft failure | Transplantation |
+| Start of treatment | Relapse | Haematology |
+| Insertion of an IUD | Discontinuation | Contraception |
+| Hospital discharge | Readmission | Health services |
+| Start of follow-up | First myocardial infarction | Cardiology |
+
+. . .
+
+The event need not be death, and it need not be bad. "Survival" is a generic word (time to recovery, to pregnancy, to discharge).
+
+## Three things must be defined
+
+1. **Time origin**: when does the clock start? (diagnosis, randomisation, surgery)
+2. **Event**: what exactly counts? (all-cause death, relapse, ...)
+3. **Time scale**: how is time measured? (usually time since origin; sometimes age)
+
+::: {.callout-warning}
+## Ambiguous definitions give meaningless results
+
+"Time from diagnosis" vs "time from start of treatment" can differ by months and change conclusions.
+Randomisation is the natural origin in a trial since groups are comparable at that point.
+:::
+
+## Example 1: IUD discontinuation
+
+Time (weeks) until 18 women discontinued use of an intrauterine device (Collett, Example 1.1).
+
+```{r}
+iud |> t()
+```
+
+`status = 1`: discontinued, `status = 0`: still using the IUD at end of observation (or lost) = **censored**.
+
+## Example 2: Breast cancer and HPA staining
+
+Survival of 45 women with breast cancer, classified by whether the tumour stained positive with the lectin HPA (Collett, Example 1.2).
+
+```{r}
+head(breast, 8)
+count(breast, stain, status)
+```
+
+Question: is staining a prognostic marker?
+
+## Example 3: Multiple myeloma
+
+48 patients with multiple myeloma, with age, sex, blood urea nitrogen, calcium, haemoglobin, plasma cells and protein (Collett, Example 1.3).
+
+```{r}
+head(myeloma, 6)
+```
+
+Question: which baseline variables are associated with survival time?
+
+## Why not "ordinary" statistics?
+
+Survival times are
+
+- **positive** and typically **right-skewed**
+- **incomplete**: for some patients we only know that the time exceeds a value
+
+Naive approaches fail:
+
+- Mean of observed times: **underestimates**, as censored times are too short
+- Dropping censored patients: biased, discards information, and keeps the early events
+- Treat censored as events: also biased downwards
+- Logistic regression on "died within 5 years": needs complete follow-up and discards timing
+
+# Censoring
+
+## Right censoring
+
+We know the patient was event-free until time $c$, but not what happened after.
+
+```{r}
+#| echo: false
+#| fig-height: 3.8
+d <- tibble(
+  id = factor(1:6, levels = 6:1),
+  time = c(5, 8, 3, 9, 6, 4),
+  event = c(1, 0, 1, 0, 1, 0),
+  why = c("Event", "Study ended", "Event", "Study ended", "Event", "Lost to follow-up")
+)
+ggplot(d, aes(y = id)) +
+  geom_segment(aes(x = 0, xend = time, yend = id), linewidth = 1) +
+  geom_point(aes(x = time, shape = why, colour = why), size = 5) +
+  scale_shape_manual(values = c(Event = 4, `Study ended` = 1, `Lost to follow-up` = 2)) +
+  labs(x = "Time since origin", y = "Patient", shape = NULL, colour = NULL)
+```
+
+Reasons: study ends, patient withdraws or moves, patient dies of an unrelated cause (see competing risks, Lecture 12–13).
+
+## Other forms of censoring
+
+| Type | What we know | Example |
+|---|---|---|
+| **Right** | $T > c$ | Alive at end of study |
+| **Left** | $T < c$ | HIV-positive at first test, infection time unknown |
+| **Interval** | $a < T \le b$ | Recurrence found at a scheduled check-up |
+
+Also: **truncation** (e.g. delayed entry, patients only enter the data if they survive to a certain time).
+
+. . .
+
+This course: **right censoring** almost throughout. Interval censoring: overview in Lecture 15 (Chapter 9).
+
+## Types of right censoring
+
+- **Type I**: fixed follow-up time (observe everyone for 5 years)
+- **Type II**: stop when a fixed number of events has occurred (animal experiments)
+- **Random / administrative censoring**: patients enter at different calendar times and the analysis is made at a common calendar date. **Most common in clinical studies.**
+
+## Study time vs patient time
+
+Patients enter the study at different calendar dates, but each has their own clock.
+
+```{r}
+#| echo: false
+#| fig-height: 3.6
+set.seed(4821)
+d <- tibble(
+  id = factor(1:6, levels = 6:1),
+  entry = c(0, 1, 2, 3, 4, 6),
+  dur = c(6, 5, 2, 7, 3, 2),
+  event = c(1, 0, 1, 1, 1, 0)
+) |> mutate(exit = pmin(entry + dur, 10), event = ifelse(entry + dur > 10, 0, event))
+ggplot(d, aes(y = id)) +
+  geom_segment(aes(x = entry, xend = exit, yend = id), linewidth = 1) +
+  geom_point(aes(x = exit, shape = factor(event)), size = 4) +
+  scale_shape_manual(values = c(`0` = 1, `1` = 4), labels = c("Censored", "Event")) +
+  geom_vline(xintercept = 10, linetype = 2) +
+  labs(x = "Calendar (study) time", y = "Patient", shape = NULL) +
+  annotate("text", x = 10, y = 6.4, label = "Analysis date", hjust = 1.05)
+```
+
+Survival analysis uses **patient time** (time since own origin): shift every line to start at 0.
+
+## The key assumption: independent censoring
+
+Patients who are censored should be representative of those who remain at risk.
+
+Given covariates, censoring must carry **no information** about future event risk.
+
+::: {.callout-important}
+## Violations
+
+- Patients withdraw **because they feel worse** (or better)
+- Patients are censored when they switch to rescue treatment
+- Sickest patients drop out of a trial
+
+The assumption **cannot be tested from the data**. It must be argued from the study design.
+:::
+
+(Dependent censoring is treated in Chapter 14, which is outside this course.)
+
+## Data layout and `Surv()` in R
+
+Each patient contributes (at least) a **time** and a **status indicator**.
+
+```{r}
+s <- with(iud, Surv(time, status))
+s
+```
+
+- `Surv()` builds the response; the `+` marks a right-censored time
+- Always check the coding of the status variable: `1 = event`, `0 = censored` (also accepts `TRUE/FALSE`, or `1/2` where 2 = event)
+
+## Check the coding
+
+```{r}
+head(lung, 4)     # in the lung data from survival: 1 = censored, 2 = dead
+with(lung, Surv(time, status))[1:6]
+```
+
+::: {.callout-tip}
+A wrong status coding **silently** gives wrong answers. Always print the first values of `Surv()` and check against the raw data.
+:::
+
+## Summary: describing the data
+
+```{r}
+myeloma |>
+  summarise(n = n(), events = sum(status), censored = sum(1 - status),
+            median_followup_obs = median(time), max_time = max(time))
+```
+
+- **Events** and **censored** counts should always be reported
+- Median of the *observed* times is not a median survival time (that comes in Lecture 2)
+
+# Describing survival
+
+## Random variable and distribution
+
+Let $T \ge 0$ be the (random) survival time with density $f(t)$ and distribution function $F(t) = P(T \le t)$.
+
+Three equivalent ways to describe the distribution:
+
+| Function | Definition | Question it answers |
+|---|---|---|
+| Survivor function $S(t)$ | $P(T > t)$ | What fraction is still event-free at $t$? |
+| Hazard function $h(t)$ | instantaneous event rate | How risky is it **right now**, for someone still at risk? |
+| Cumulative hazard $H(t)$ | $\int_0^t h(u)\,du$ | How much risk has accumulated until $t$? |
+
+## The survivor function
+
+$$S(t) = P(T > t) = 1 - F(t)$$
+
+- $S(0) = 1$, non-increasing, $S(\infty) = 0$ (when everyone eventually has the event)
+- Reading: "probability of surviving beyond $t$"
+- **Median survival time**: $t_{50}$ with $S(t_{50}) = 0.5$
+- Used to compare groups graphically (Kaplan–Meier curves, Lecture 2)
+
+## The hazard function
+
+$$h(t) = \lim_{\Delta t \to 0} \frac{P(t \le T < t + \Delta t \mid T \ge t)}{\Delta t}$$
+
+- The **instantaneous rate** of the event at $t$, given survival up to $t$
+- Not a probability, can exceed 1; unit is "events per unit time"
+- $h(t)\Delta t \approx$ probability of the event in the next short interval $\Delta t$
+
+. . .
+
+**Intuition**: death rate in the *next week* among those alive today. A car's hazard of failure is low at first, then increases with age.
+
+## Hazard shapes in medicine
+
+::: {.columns}
+::: {.column width="50%"}
+```{r}
+#| echo: false
+#| fig-height: 5
+t <- seq(0.01, 5, length.out = 300)
+tibble(t = t,
+       `Constant` = rep(0.5, 300),
+       `Increasing` = 0.4 * 1.8 * (0.4 * t)^0.8,
+       `Decreasing` = 0.9 * 0.6 * (0.9 * t)^-0.4,
+       `Bathtub` = 1.2 * exp(-2 * t) + 0.1 + 0.02 * exp(1.2 * t)) |>
+  pivot_longer(-t, names_to = "shape", values_to = "h") |>
+  mutate(shape = factor(shape, levels = c("Constant", "Increasing", "Decreasing", "Bathtub"))) |>
+  ggplot(aes(t, h)) + geom_line(linewidth = 1.2) + facet_wrap(~shape) +
+  coord_cartesian(ylim = c(0, 2.5)) + labs(x = "Time", y = "h(t)")
+```
+:::
+::: {.column width="50%"}
+- **Constant**: no ageing, e.g. random events
+- **Increasing**: ageing, e.g. patient with untreated chronic disease
+- **Decreasing**: early high risk, e.g. after major surgery (perioperative mortality)
+- **Bathtub**: neonates, then healthy years, then old age
+:::
+:::
+
+## Cumulative hazard
+
+$$H(t) = \int_0^t h(u)\,du$$
+
+- Non-decreasing, $H(0) = 0$
+- Slope of $H(t)$ is $h(t)$: **easier to estimate** from data than $h(t)$ itself
+- Interpretation: expected number of events up to $t$ **if the event could recur** and the patient were kept at risk
+
+## How they relate
+
+$$h(t) = \frac{f(t)}{S(t)} = -\frac{d}{dt}\log S(t), \qquad
+H(t) = -\log S(t), \qquad S(t) = \exp\{-H(t)\}$$
+
+Knowing one of $S$, $h$, $H$, $f$ means knowing all.
+
+. . .
+
+**Why work with the hazard?**
+
+- It describes the *mechanism* (how risk changes over time)
+- Regression models are most naturally built on the hazard: $h(t \mid x) = h_0(t)\, e^{\beta' x}$ (Cox model, Lecture 4)
+- Censoring and delayed entry fit naturally
+
+## Example: the exponential distribution
+
+Constant hazard $h(t) = \lambda$. Then
+
+$$H(t) = \lambda t, \qquad S(t) = e^{-\lambda t}, \qquad \text{median} = \frac{\log 2}{\lambda}$$
+
+```{r}
+#| fig-height: 3.8
+lambda <- 0.1   # events per month
+tibble(t = seq(0, 40, 0.1)) |>
+  mutate(S = exp(-lambda * t)) |>
+  ggplot(aes(t, S)) + geom_line(linewidth = 1.2) +
+  geom_hline(yintercept = 0.5, linetype = 2) + geom_vline(xintercept = log(2) / lambda, linetype = 2) +
+  labs(x = "Months", y = "S(t)")
+```
+
+Median $= \log 2 / 0.1 \approx `r round(log(2) / lambda, 1)` months.
+
+## Example: the Weibull distribution
+
+$$h(t) = \lambda \gamma t^{\gamma - 1}, \quad S(t) = \exp(-\lambda t^{\gamma})$$
+
+- $\gamma = 1$: exponential. $\gamma > 1$: increasing hazard. $\gamma < 1$: decreasing hazard.
+
+```{r}
+#| fig-height: 3.8
+crossing(t = seq(0.01, 5, 0.02), gamma = c(0.5, 1, 2)) |>
+  mutate(h = gamma * t^(gamma - 1), S = exp(-t^gamma), gamma = factor(gamma)) |>
+  pivot_longer(c(h, S), names_to = "fun", values_to = "value") |>
+  ggplot(aes(t, value, colour = gamma)) + geom_line(linewidth = 1.1) +
+  facet_wrap(~fun, scales = "free_y") + coord_cartesian(ylim = c(0, 3)) +
+  labs(x = "Time", y = NULL)
+```
+
+We return to parametric models in Lecture 8 (Chapter 5).
+
+## Hazard vs risk vs probability
+
+::: {.callout-note}
+## Three different things
+
+- **Hazard** $h(t)$: rate at $t$ among those still at risk (per time unit)
+- **Cumulative incidence** $F(t) = 1 - S(t)$: proportion with the event by $t$
+- **Hazard ratio**: ratio of two hazard functions. "Twice the hazard" does **not** mean "twice the probability of dying by 5 years"
+:::
+
+Example: if the 1-year survival is 90% in group A and 80% in group B, the risk ratio is 2 for the event, but the ratio of hazards is $\log 0.8 / \log 0.9 \approx `r round(log(0.8) / log(0.9), 2)`$.
+
+```{r}
+log(0.8) / log(0.9)
+```
+
+## Summary measures of the survival distribution
+
+| Measure | Definition | Comment |
+|---|---|---|
+| Median survival | $S(t_{50}) = 0.5$ | Most commonly reported; robust to the tail |
+| Other percentiles | e.g. $t_{25}$, $t_{75}$ | Often a quartile range |
+| $S(t_0)$ | e.g. 5-year survival | Useful when follow-up is adequate |
+| Mean | $\int_0^\infty S(t)\,dt$ | Not estimable if the last obs. is censored |
+| Restricted mean | $\int_0^{\tau} S(t)\,dt$ | Mean survival up to $\tau$ (Lecture 2) |
+
+# Medical thinking with survival data
+
+## Discussion: what would you do?
+
+A cancer trial reports *"mean follow-up 18 months"*, *"median survival not reached"*, and *"12 of 60 patients censored"*.
+
+1. What might "median survival not reached" mean?
+2. Is "mean follow-up" computed from all patients a good measure of follow-up? (Think about censoring. We return to this in Lecture 2.)
+3. Which origin and which event would you choose in a trial of adjuvant therapy?
+
+. . .
+
+**Pair discussion, 3 minutes.**
+
+## Typical questions answered with survival analysis
+
+| Question | Method | Lecture |
+|---|---|---|
+| What is the survival curve of this group? | Kaplan–Meier | 2 |
+| Do two treatments differ? | Log-rank test | 3 |
+| Which factors affect survival, adjusted for others? | Cox regression | 4–7 |
+| Does the effect change over time? | Non-proportional hazards | 11 |
+| What if a patient can die of several causes? | Competing risks | 12–13 |
+| Patients can have repeated events? | Event history | 14 |
+
+## Course roadmap
+
+```{mermaid}
+%%| fig-height: 4
+flowchart LR
+  A[Concepts<br/>censoring, S, h, H] --> B[Non-parametric<br/>Kaplan-Meier, log-rank]
+  B --> C[Cox regression<br/>& model checking]
+  C --> D[Parametric<br/>models]
+  D --> E[Time-dependent<br/>covariates]
+  E --> F[Advanced:<br/>non-PH, competing risks,<br/>recurrent events]
+```
+
+Tools: R with `survival`, `ggsurvfit`, `gtsummary`.
+
+## Take-home messages
+
+- Survival data = time to an event + **censoring**; ignoring censoring biases results
+- Define **origin, event and time scale** carefully
+- Independent censoring is an assumption that must be argued, not tested
+- $S(t)$, $h(t)$ and $H(t)$ are equivalent descriptions: $S(t) = \exp\{-H(t)\}$
+- In R: `Surv(time, status)`, and check the coding
+
+**Next lecture**: estimating $S(t)$ and $H(t)$ from data with Kaplan–Meier and Nelson–Aalen.
+
+**Reading**: Collett, Chapter 1.
+
+## Quick quiz {.smaller}
+
+1. A patient is still alive at the end of the study after 40 months. What are the `time` and `status`?
+2. If $S(2) = 0.6$, what is $H(2)$?
+3. Which of the following is the hazard: the proportion who die in year 2, or the rate of dying at 2 years among those alive at 2 years?
+4. A hospital reports average survival time from the recorded times of dead patients only. Direction of the bias?
+
+```{r}
+-log(0.6)
+```
+
+::: {.fragment}
+Answers: (1) time 40, status 0. (2) $-\log 0.6 \approx `r round(-log(0.6), 2)`$. (3) the second. (4) Underestimated: those who survive longest are still alive, and are excluded.
+:::

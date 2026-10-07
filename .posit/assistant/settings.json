@@ -1,0 +1,54 @@
+{
+  "permission": {
+    "webfetch": {
+      "https://agentskills.io/*": "allow",
+      "https://platform.claude.com/*": "allow",
+      "https://cloud.timeedit.net/*": "allow"
+    },
+    "bash": {
+      "textutil *": "allow",
+      "head *": "allow",
+      "which *": "allow",
+      "echo *": "allow",
+      "pdftotext *": "allow",
+      "cd *": "allow",
+      "git log *": "allow",
+      "git branch *": "allow",
+      "git status *": "allow",
+      "ls *": "allow",
+      "cat *": "allow",
+      "Rscript *": "allow",
+      "tail *": "allow",
+      "mkdir *": "allow",
+      "./render.sh *": "allow",
+      "quarto *": "allow",
+      "typst *": "allow",
+      "sed *": "allow"
+    },
+    "executeCode": {
+      "*": "allow"
+    },
+    "edit": {
+      "*.md": "allow",
+      "*.yml": "allow",
+      "*.qmd": "allow",
+      "*.lua": "allow",
+      "*.sh": "allow",
+      "*.scss": "allow"
+    },
+    "external_directory": {
+      "/tmp/*": "allow",
+      "/private/tmp/*": "allow"
+    },
+    "read": {
+      "*.txt": "allow"
+    },
+    "skill": {
+      "sta310-exercise-authoring": "allow",
+      "sta310-course-planning": "allow"
+    },
+    "task": {
+      "general": "allow"
+    }
+  }
+}

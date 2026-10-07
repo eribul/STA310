@@ -1,0 +1,31 @@
+project:
+  type: default
+  render:
+    - "*/*.qmd"
+
+lang: en
+
+format:
+  revealjs:
+    theme: [simple, styles.scss]
+    slide-number: c/t
+    width: 1280
+    height: 720
+    scrollable: true
+    auto-stretch: false
+    incremental: false
+    code-line-numbers: false
+    code-fold: false
+    chalkboard: false
+    fig-align: center
+    fig-width: 8
+    fig-height: 4.5
+    fig-dpi: 150
+    footer: "STA310 Survival Analysis · University of Gothenburg"
+    embed-resources: true
+
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: false

@@ -1,0 +1,643 @@
+---
+title: "Lecture 6: Model Checking in the Cox Model I"
+subtitle: "STA310 Survival Analysis · Collett Chapter 4 (part 1)"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+myeloma <- read.table(
+  file.path(data_dir, "Survival of multiple myeloma patients.dat"),
+  header = TRUE
+)
+breast <- read.table(
+  file.path(data_dir, "Prognosis for women with breast cancer.dat"),
+  header = TRUE
+)
+breast$stain <- factor(
+  breast$stain,
+  levels = 1:2,
+  labels = c("Negative", "Positive")
+)
+ovar <- read.table(
+  file.path(data_dir, "Chemotherapy in ovarian cancer patients.dat"),
+  header = TRUE
+)
+ovar$treat <- factor(
+  ovar$treat,
+  levels = 1:2,
+  labels = c("Single", "Combination")
+)
+ovar$rdisease <- factor(
+  ovar$rdisease,
+  levels = 1:2,
+  labels = c("Incomplete", "Complete")
+)
+ovar$perf <- factor(ovar$perf, levels = 1:2, labels = c("Good", "Poor"))
+vet <- veteran
+vet$celltype <- factor(vet$celltype)
+vet$trt <- factor(vet$trt, levels = 1:2, labels = c("standard", "test"))
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. Why check the model?
+2. Residuals for survival data: overview
+3. Cox–Snell, martingale, deviance residuals
+4. The proportional hazards assumption
+5. Graphical checks and `cox.zph`
+6. What to do when PH fails
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+You can
+
+- name what can go wrong in a Cox model
+- choose the residual that fits a given question
+- check proportional hazards graphically and formally in R
+- interpret `cox.zph` output and react sensibly to a violation
+:::
+:::
+
+## Recap
+
+- Cox model: $h(t \mid x) = h_0(t)\exp(\beta_1 x_1 + \dots + \beta_p x_p)$
+- $\exp(\beta_j)$ = hazard ratio (HR), **the same at all times**
+- Lectures 4-5: fitting, interpreting, selecting variables
+
+**Today's question**: we have a fitted model. Can we trust the HRs we report?
+
+# Why check the model?
+
+## What can go wrong
+
+| Problem | Question | Consequence |
+|---|---|---|
+| Non-proportional hazards | Is the HR constant over time? | One HR is an average; may mislead |
+| Wrong functional form | Is the effect of a continuous $x$ linear on the log hazard? | Biased or misleading HR per unit |
+| Outliers | Are some patients badly predicted? | Poor fit, possibly a data error |
+| Influential patients | Does one patient drive the estimate? | Unstable conclusions |
+| Missing covariates / interactions | Is the model too simple? | Confounding, wrong effects |
+
+. . .
+
+Today: **residuals** and the **PH assumption**. Next lecture: influence and functional form in more depth.
+
+## Link to interpreting an HR
+
+"Combination therapy has HR 0.5" claims that at **every** time, the hazard is halved.
+
+- If the true HR is 0.2 early and 1.0 late, the reported 0.5 describes neither period
+- If $\log$ hazard is not linear in age, "HR per year of age" is not one number
+- The estimate is still a number: only checks reveal that its interpretation fails
+
+::: {.callout-note}
+No model is exactly true. We look for **departures large enough to change conclusions**, not for perfection.
+:::
+
+## Running example 1: multiple myeloma
+
+48 patients, survival time in months; `bun` (blood urea nitrogen), `hb` (haemoglobin), `ca`, `pcells`, `protein`, `age`, `sex`.
+
+```{r}
+fit_my <- coxph(
+  Surv(time, status) ~ age + sex + bun + ca + hb + pcells + protein,
+  data = myeloma
+)
+broom::tidy(fit_my, exponentiate = TRUE, conf.int = TRUE) |>
+  select(term, HR = estimate, conf.low, conf.high, p.value) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+We use this model to illustrate the residuals.
+
+# Residuals
+
+## Residuals in survival analysis
+
+In linear regression: $e_i = y_i - \hat y_i$. For survival data this is not possible:
+
+- $T_i$ is **censored** for some patients, so there is no observed $y_i$ to subtract from
+- the distribution is skewed, with a hazard rather than a mean
+
+. . .
+
+Instead, several residuals are defined, **each designed for one purpose**:
+
+- **Cox–Snell**: overall fit
+- **Martingale**: functional form
+- **Deviance**: outliers
+- **Schoenfeld**: proportional hazards
+
+## Cox–Snell residuals
+
+For patient $i$ with covariates $x_i$ and observed time $t_i$:
+
+$$r_{Ci} = \hat H_i(t_i) = \hat H_0(t_i)\exp(\hat\beta' x_i)$$
+
+If the model is correct, $\{r_{Ci}\}$ behave like a (censored) sample from a unit exponential distribution, $H(T) \sim \text{Exp}(1)$.
+
+. . .
+
+**Check**: compute the Nelson–Aalen estimate $\hat H_{CS}(r)$ of the cumulative hazard of the $r_{Ci}$ (treating the censoring indicator as is) and plot it against $r$. For a unit exponential, $H(r) = r$: the points should follow the **45-degree line**.
+
+## Cox–Snell in R
+
+R gives martingale residuals $r_{Mi} = \delta_i - r_{Ci}$, so $r_{Ci} = \delta_i - r_{Mi}$.
+
+```{r}
+#| output-location: column
+#| fig-height: 5
+cs <- myeloma$status - residuals(fit_my, type = "martingale")
+na <- survfit(Surv(cs, myeloma$status) ~ 1)
+tibble(r = na$time, H = -log(na$surv)) |>
+  ggplot(aes(r, H)) +
+  geom_step() +
+  geom_abline(slope = 1, intercept = 0, linetype = 2, colour = "red") +
+  coord_equal() +
+  labs(x = "Cox-Snell residual", y = "Estimated cumulative hazard")
+```
+
+Interpretation: the curve follows the line reasonably, with only `r nrow(myeloma)` patients, so we expect some wiggling. No gross lack of fit is visible.
+
+## Limitations of the Cox–Snell plot
+
+::: {.callout-warning}
+- Residuals use the **estimated** $\hat\beta$ and $\hat H_0$, so they are not exactly exponential; the **right tail** is especially unreliable
+- Censored observations make the tail even more variable
+- The plot is an **overall** check: it is insensitive to specific problems such as one covariate with non-PH or a wrong functional form
+- It is poorly able to say **what** is wrong
+:::
+
+Collett's recommendation: Cox–Snell is a rough first look. Use targeted residuals for specific questions.
+
+## Martingale residuals
+
+$$r_{Mi} = \delta_i - \hat H_0(t_i)\exp(\hat\beta'x_i) = \delta_i - r_{Ci}$$
+
+- Observed events minus expected events for patient $i$
+- Range $(-\infty, 1]$; mean zero; **skewed**: censored patients get $r_M \le 0$, events $r_M \in (0, 1]$
+- Sum to zero, approximately uncorrelated
+
+Main use: **functional form** of a continuous covariate.
+
+## Martingale residuals: functional form
+
+Idea: fit a model **without** covariate $x$ (for a single covariate: the null model), then plot $r_{M}$ against $x$ and add a smoother.
+
+- The smooth shows the shape of the true relation between $x$ and the log hazard
+- Straight line: linear term is fine
+- Curve (U-shape, plateau, threshold): transform or use a more flexible term
+
+```{r}
+#| eval: false
+fit0 <- coxph(Surv(time, status) ~ 1, data = d) # null model
+# or the model with all the OTHER covariates
+rm <- residuals(fit0, type = "martingale")
+plot(d$x, rm)
+lines(lowess(d$x, rm))
+```
+
+## Example: `bun` and `hb` in myeloma
+
+Residuals from the model **without** the covariate being examined, i.e. adjusted for the others.
+
+```{r}
+#| fig-height: 4.5
+rm_bun <- residuals(
+  coxph(
+    Surv(time, status) ~ age + sex + ca + hb + pcells + protein,
+    data = myeloma
+  ),
+  type = "martingale"
+)
+rm_hb <- residuals(
+  coxph(
+    Surv(time, status) ~ age + sex + bun + ca + pcells + protein,
+    data = myeloma
+  ),
+  type = "martingale"
+)
+bind_rows(
+  tibble(x = myeloma$bun, r = rm_bun, var = "bun"),
+  tibble(x = myeloma$hb, r = rm_hb, var = "hb")
+) |>
+  ggplot(aes(x, r)) +
+  geom_point() +
+  geom_smooth(method = "loess", se = FALSE, formula = y ~ x) +
+  facet_wrap(~var, scales = "free_x") +
+  labs(x = "Covariate value", y = "Martingale residual")
+```
+
+## Reading the plot
+
+- `bun`: the smooth is flat (well ...) over the bulk (median `r median(myeloma$bun)`) and rises only in the sparse upper tail — `r sum(myeloma$bun > 50)` patients have `bun` > 50 (`r sum(myeloma$status[myeloma$bun > 50])` died). That rise rests on a handful of points, so the plot is too noisy to settle `bun`'s functional form. Skew is a reason to *check* `log(bun)`, but a linear term is actually preferred here (lower AIC).
+- `hb`: the smooth is not a straight line — it rises at low `hb`, falls through the middle, then turns back up near `hb` = 14. Low `hb` is clearly high risk (`r sum(myeloma$status[myeloma$hb < 6])` of `r sum(myeloma$hb < 6)` with `hb` < 6 died); the ends are small clusters, not empty. With `r nrow(myeloma)` patients the functional form is hard to pin down.
+
+::: {.callout-important}
+Skewed martingale residuals + few points: the smoother is noisy. Interpret **shape**, not wiggles. Lecture 7 treats this in depth (transformations, splines).
+:::
+
+## Deviance residuals
+
+Martingale residuals are skewed. The deviance residual is a transformation to make them more symmetric:
+
+$$r_{Di} = \operatorname{sign}(r_{Mi})\sqrt{-2\left[r_{Mi} + \delta_i\log(\delta_i - r_{Mi})\right]}$$
+
+- Roughly symmetric around 0, approximately standard normal if little censoring
+- Large $|r_D|$ (say $> 2$ to $2.5$): patient poorly fitted by the model, **outlier**
+- Plot against the linear predictor $\hat\eta_i = \hat\beta'x_i$, against covariates, or against index
+
+Positive: died **earlier** than the model predicts. Negative: lived longer (or censored while the model expected an event).
+
+## Deviance residuals in R
+
+```{r}
+#| output-location: column
+#| fig-height: 5
+myeloma |>
+  mutate(
+    dev = residuals(fit_my, type = "deviance"),
+    lp = predict(fit_my, type = "lp")
+  ) |>
+  ggplot(aes(lp, dev, colour = factor(status))) +
+  geom_point(size = 2) +
+  geom_hline(yintercept = c(-2, 2), linetype = 2) +
+  scale_colour_manual(
+    values = c("grey50", "firebrick"),
+    labels = c("censored", "died")
+  ) +
+  labs(x = "Linear predictor", y = "Deviance residual", colour = NULL)
+```
+
+```{r}
+max(abs(residuals(fit_my, type = "deviance")))
+```
+
+Largest $|r_D|$ is `r round(max(abs(residuals(fit_my, type = "deviance"))), 2)`.
+An outlier is **not** automatically an influential point: that comes next lecture.
+
+## Schoenfeld residuals
+
+Defined **only at event times**, one per covariate per event.
+
+For event at $t_i$ with covariates $x_i$:
+$$r_{Si} = x_i - \hat{\bar x}(t_i)$$
+the covariate of the patient who failed **minus** the weighted average covariate in the risk set at $t_i$.
+
+- If PH holds: residuals scatter around 0 **with no trend in time**
+- If the effect of $x$ changes with time: a trend appears
+- **Scaled** Schoenfeld residuals (Grambsch–Therneau): $\hat\beta + $ scaled $r_S$ is an estimate of $\beta(t)$, the coefficient at time $t$
+
+Use: the PH assumption (the main part of this lecture).
+
+## Summary table: residuals
+
+| Residual | R: `residuals(fit, type = )` | Purpose | A problem looks like |
+|---|---|---|---|
+| Cox–Snell | `"martingale"`, then $\delta - r_M$ | Overall fit | Cumulative hazard plot departs from 45-degree line |
+| Martingale | `"martingale"` | Functional form of a continuous $x$ | Smooth against $x$ (from model without $x$) is not a straight line |
+| Deviance | `"deviance"` | Outliers | $|r_D| > 2$-$2.5$; isolated points |
+| Schoenfeld (scaled) | `"scaledsch"` or `cox.zph` | Proportional hazards | Smooth against time has a slope |
+| Score / dfbeta | `"dfbeta"`, `"score"` | Influence | Next lecture |
+
+# Proportional hazards
+
+## The assumption
+
+$$\frac{h(t \mid x_1)}{h(t \mid x_0)} = \exp\{\beta(x_1 - x_0)\} \quad \text{for all } t$$
+
+Equivalent statement: $\log H(t \mid x) = \log H_0(t) + \beta'x$, so on the **log cumulative hazard scale the curves for different $x$ are parallel**.
+
+Violations seen in practice:
+
+- hazards **converge** (effect of a treatment wears off, or early selection)
+- hazards **diverge** (effect builds up)
+- hazards **cross** (surgery: early risk, later benefit)
+
+## Three tools
+
+1. **Graphical** (grouped covariate): log-minus-log plot
+2. **Graphical** (any covariate): scaled Schoenfeld residuals versus time with a smoother
+3. **Formal test**: `cox.zph`, a test of zero slope of the Schoenfeld residuals against (a transformation of) time
+
+. . .
+
+We first look at a data set where PH is clearly violated, then at examples where it is fine.
+
+## Running example 2: veteran lung cancer trial
+
+Randomised trial of two chemotherapies in 137 men with inoperable lung cancer (`survival::veteran`).
+
+- `trt`: standard / test; `celltype`: squamous, smallcell, adeno, large
+- `karno`: Karnofsky performance score (10-100, 100 = normal)
+- `time` in days; 128 deaths
+
+```{r}
+fit_vet <- coxph(Surv(time, status) ~ trt + celltype + karno + age, data = vet)
+broom::tidy(fit_vet, exponentiate = TRUE, conf.int = TRUE) |>
+  select(term, HR = estimate, conf.low, conf.high, p.value) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+## Log-minus-log plot
+
+For a categorical covariate: estimate $\hat S(t)$ per group by Kaplan–Meier and plot $\log\{-\log \hat S(t)\} = \log \hat H(t)$ against $t$ (or $\log t$).
+
+**PH holds** $\Rightarrow$ curves are **parallel** (vertical distance $=\beta$).
+
+```{r}
+#| fig-height: 4.3
+survfit2(Surv(time, status) ~ celltype, data = vet) |>
+  ggsurvfit(type = "cloglog") +
+  scale_x_log10() +
+  labs(x = "Days (log scale)", y = "log(-log S(t))")
+```
+
+## Reading the log-minus-log plot
+
+- Parallel curves: PH plausible. Crossing or converging curves: PH doubtful.
+- Check in the plot whether the curves keep a constant vertical distance; in the first part of follow-up, based on few events, they are noisy. Here the log-minus-log plot is only suggestive, and the formal test below gives a firmer answer.
+- Weakness: **subjective**; for a continuous $x$ you must group it, and with small groups the curves are noisy
+
+::: {.callout-tip}
+Use the same cut-points that you would use in a clinical presentation, and look for **systematic** divergence, not small wiggles.
+:::
+
+## Continuous covariate: group it
+
+Karnofsky score, dichotomised at 60 for the plot only:
+
+```{r}
+#| fig-height: 4.3
+vet <- vet |>
+  mutate(
+    karno_grp = factor(karno >= 60, labels = c("karno < 60", "karno >= 60"))
+  )
+survfit2(Surv(time, status) ~ karno_grp, data = vet) |>
+  ggsurvfit(type = "cloglog") +
+  scale_x_log10() +
+  labs(x = "Days (log scale)", y = "log(-log S(t))")
+```
+
+Compare the vertical distance between the curves early and late: parallel curves would keep it constant. Together with the Schoenfeld plot below, this suggests that the effect of `karno` changes over time.
+
+## Scaled Schoenfeld residuals: `cox.zph`
+
+```{r}
+zph <- cox.zph(fit_vet)
+zph
+```
+
+- Each row tests: slope of the scaled Schoenfeld residuals against time is zero. $H_0$: PH holds for that covariate.
+- **GLOBAL**: simultaneous test of all covariates (df = number of coefficients)
+- Default time transformation: Kaplan–Meier (`transform = "km"`); `"identity"`, `"log"`, `"rank"` are alternatives
+
+## Interpreting the output
+
+- `karno`: $\chi^2 =$ `r round(zph$table["karno", "chisq"], 1)`, $p =$ `r signif(zph$table["karno", "p"], 2)`. Evidence against PH for `karno`.
+- `celltype` (3 df, a single test for the factor): $\chi^2 =$ `r round(zph$table["celltype", "chisq"], 1)`, $p =$ `r signif(zph$table["celltype", "p"], 2)`. Evidence against PH.
+- `trt` and `age`: no evidence against PH ($p =$ `r round(zph$table["trt", "p"], 2)` and `r round(zph$table["age", "p"], 2)`).
+- GLOBAL: $p =$ `r signif(zph$table["GLOBAL", "p"], 2)`, the model **as a whole** does not satisfy PH.
+
+::: {.callout-note}
+A non-significant `trt` test does not "prove" PH for `trt`. Also, a violation in one covariate can distort the tests for others.
+:::
+
+## Schoenfeld plot by hand with ggplot2
+
+`zph$y` holds scaled residuals (columns = coefficients), `zph$time` the event times. Adding $\hat\beta$ gives a pointwise estimate of $\beta(t)$.
+
+```{r}
+zph_df <- function(z, fit, var) {
+  tibble(time = z$time, beta_t = z$y[, var] + coef(fit)[var])
+}
+plot_zph <- function(z, fit, var) {
+  ggplot(zph_df(z, fit, var), aes(time, beta_t)) +
+    geom_point(alpha = 0.6) +
+    geom_smooth(
+      method = "loess",
+      span = 0.8,
+      formula = y ~ x,
+      colour = "firebrick"
+    ) +
+    geom_hline(yintercept = coef(fit)[var], linetype = 2) +
+    scale_x_log10() +
+    labs(x = "Time (log scale)", y = paste0("Beta(t) for ", var))
+}
+```
+
+The dashed line is the constant coefficient under PH.
+
+## `karno`: PH fails
+
+```{r}
+#| fig-height: 4.5
+plot_zph(zph, fit_vet, "karno")
+```
+
+The smoothed $\hat\beta(t)$ for `karno` starts clearly negative (a high score protects) and rises towards 0 for later times: the protective effect of a good performance status **fades**. A single HR of `r round(exp(coef(fit_vet)["karno"]), 3)` per point averages over this.
+
+## Compare with a covariate where PH holds
+
+```{r}
+#| fig-height: 4.5
+plot_zph(zph, fit_vet, "age")
+```
+
+The smooth stays near the dashed line: no trend.
+
+## Built-in plot
+
+```{r}
+#| fig-height: 4.3
+plot(zph[3], resid = TRUE) # third coefficient group in the order of the table
+abline(h = 0, lty = 3)
+```
+
+`plot.cox.zph` (what `survminer::ggcoxzph` wraps) shows the smooth with a confidence band; the ggplot version above gives full control.
+
+## Example where PH is fine: myeloma
+
+```{r}
+cox.zph(fit_my)
+```
+
+All $p > 0.1$ and GLOBAL $p =$ `r round(cox.zph(fit_my)$table["GLOBAL", "p"], 2)`. No evidence against PH. But $n = 48$ with 36 deaths: low **power**.
+
+## Ovarian cancer and breast cancer
+
+::: {.columns}
+::: {.column width="50%"}
+Ovarian cancer (n = 26), treatment, age, residual disease, performance:
+
+```{r}
+fit_ov <- coxph(Surv(time, status) ~ treat + age + rdisease + perf, data = ovar)
+cox.zph(fit_ov)
+```
+:::
+::: {.column width="50%"}
+Breast cancer (n = 45), HPA staining:
+
+```{r}
+fit_br <- coxph(Surv(time, status) ~ stain, data = breast)
+cox.zph(fit_br)
+```
+:::
+:::
+
+No test is significant at 5%. With 26 and 45 patients (few events) we could miss moderate departures.
+
+## Breast cancer: log-minus-log plot
+
+```{r}
+#| fig-height: 4.3
+survfit2(Surv(time, status) ~ stain, data = breast) |>
+  ggsurvfit(type = "cloglog") +
+  scale_x_log10() +
+  labs(x = "Months (log scale)", y = "log(-log S(t))")
+```
+
+Curves are roughly parallel apart from early noise. PH is reasonable for `stain` but the data cannot exclude moderate deviations.
+
+## Power and judgement
+
+- The test is a **test of a slope**: small $n$ $\to$ low power; large $n$ $\to$ trivial deviations become "significant"
+- Result depends on the time transformation chosen
+- Many covariates $\to$ multiple testing; the GLOBAL line helps somewhat
+
+::: {.callout-important}
+**Combine the test with the plot.** Significant test + small visible trend in a large study: perhaps ignorable. Non-significant test + clear trend in a small study: do not rely on the p-value.
+Ask: would a time-varying HR change the clinical message?
+:::
+
+## Making the test intuitive: a quick check by splitting
+
+```{r}
+#| fig-height: 4
+vet2 <- survSplit(
+  Surv(time, status) ~ .,
+  data = vet,
+  cut = 90,
+  episode = "period"
+)
+fit_split <- coxph(
+  Surv(tstart, time, status) ~ karno:strata(period) + celltype + trt + age,
+  data = vet2
+)
+broom::tidy(fit_split, exponentiate = TRUE) |>
+  filter(str_detect(term, "karno")) |>
+  select(term, HR = estimate, p.value) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+Separate `karno` HRs before and after day 90: the estimated log-HR per point is `r round(coef(fit_split)["karno:strata(period)period=1"], 3)` before and `r round(coef(fit_split)["karno:strata(period)period=2"], 3)` after day 90, i.e. the effect has essentially vanished, in line with the plot (day 90 is an arbitrary cut-point, used for illustration).
+
+# When PH fails
+
+## Options
+
+1. **Stratify** on the offending (categorical) covariate: separate $h_{0g}(t)$ per group, common $\beta$ for the rest
+2. **Time-varying coefficient** $\beta(t)$, e.g. interaction with $\log t$ (lectures 10-11)
+3. **Another effect measure**: e.g. restricted mean survival time difference, or HRs reported for **separate time periods**
+4. **Rethink the model**: PH can fail because of a missing covariate or the wrong functional form
+
+Which one depends on the aim: is the violating variable a **confounder** (stratify) or the **exposure of interest** (model its effect)?
+
+## Option 1: stratify
+
+```{r}
+fit_str <- coxph(
+  Surv(time, status) ~ trt + karno + age + strata(celltype),
+  data = vet
+)
+broom::tidy(fit_str, exponentiate = TRUE, conf.int = TRUE) |>
+  select(term, HR = estimate, conf.low, conf.high, p.value) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+cox.zph(fit_str)
+```
+
+Recall Lecture 5 (where pros and cons are discussed): each cell type gets its own baseline hazard and no HR for `celltype` is estimated. Stratifying cannot help with a continuous covariate such as `karno`, and `cox.zph` still shows the `karno` problem.
+
+## Option 2: coefficient depending on time (preview)
+
+Let $\beta(t) = \beta_0 + \beta_1 g(t)$ with $g(t) = \log t$:
+
+```{r}
+fit_tt <- coxph(
+  Surv(time, status) ~ trt + celltype + karno + age + tt(karno),
+  data = vet,
+  tt = function(x, t, ...) x * log(t)
+)
+summary(fit_tt)$coefficients |> round(4)
+```
+
+The `tt(karno)` coefficient is the change of the `karno` log-HR per unit of $\log t$. Its test is essentially the same as `cox.zph`'s. Estimation details, interpretation and pitfalls: lectures 10-11.
+
+## Option 3: other effect measures
+
+- If the HR is not constant, one number does not describe the effect
+- Alternatives: difference in **restricted mean survival time** to horizon $\tau$, or difference in survival probability at a clinically relevant time, with KM curves shown
+- Honest reporting: **show the curves** and state that the HR is an average
+
+## Example: wanes with time?
+
+```{r}
+#| fig-height: 4.3
+survfit2(Surv(time, status) ~ karno_grp, data = vet) |>
+  ggsurvfit() +
+  add_risktable() +
+  labs(x = "Days", y = "Survival probability")
+```
+
+Compare with the declining $\beta(t)$: the curves show the separation as a function of time.
+
+## A workflow
+
+```{mermaid}
+flowchart LR
+  A[Fit Cox model] --> B[cox.zph: global and per covariate]
+  B --> C[Plot scaled Schoenfeld residuals]
+  C --> D{Relevant violation?}
+  D -- no --> E[Report HRs, mention check]
+  D -- yes --> F[Stratify / time-varying effect / other measure]
+  F --> B
+```
+
+Remember to also check functional form and influence (next lecture).
+
+## In-class exercise
+
+Use the **ovarian cancer** data.
+
+1. Fit `coxph(Surv(time, status) ~ treat + age + rdisease + perf)`.
+2. Run `cox.zph()`. Which covariate has the smallest p-value? What does the GLOBAL line say?
+3. Plot the scaled Schoenfeld residuals of `perf` against time and decide whether you see a trend.
+4. Plot the martingale residuals of the null model against `age` with a lowess smooth.
+5. With $n = 26$: how much weight would you put on a non-significant `cox.zph`?
+
+::: {.callout-tip}
+Hint: `plot_zph(cox.zph(fit_ov), fit_ov, "perfPoor")` needs the coefficient name, check `names(coef(fit_ov))`.
+:::
+
+## Take-home messages
+
+- An HR is only meaningful if the model assumptions hold: check **PH**, **functional form**, **outliers/influence**
+- Each residual has a purpose: Cox–Snell (overall), martingale (functional form), deviance (outliers), Schoenfeld (PH)
+- PH: log-minus-log plot, Schoenfeld residuals against time, `cox.zph` (look at GLOBAL too)
+- The test has low power in small samples and detects trivial effects in big ones: **always combine with plots**
+- If PH fails: stratify, model $\beta(t)$, or report other measures. Think about the clinical meaning
+
+**Next lecture**: Model checking II: influence (dfbeta, leverage), functional form in depth (transformations, splines) and a complete worked analysis.
+
+**Reading**: Collett, Chapter 4 (4.1 residuals, 4.2 model fit, 4.4 proportional hazards; 4.3 influence for next time).

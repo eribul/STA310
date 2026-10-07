@@ -1,0 +1,461 @@
+---
+title: "Survival Analysis — Formula Sheet"
+subtitle: "STA310 · Collett, *Modelling Survival Data in Medical Research*, 4th ed. (2023)"
+lang: en
+format:
+  typst:
+    toc: true
+execute:
+  warning: false
+  message: false
+---
+
+This sheet collects the key formulas of the course, organised by the chapters of
+Collett (2023). Equation numbers in parentheses, e.g. (2.4), refer to the book's own
+numbering; section references such as §2.2.1 point to where the formula is derived and
+illustrated. Formulas that the book leaves unnumbered carry only a section reference.
+Notation that recurs throughout is defined once below.
+
+## Notation
+
+| Symbol | Meaning |
+|---|---|
+| $T$ | Survival (event) time of an individual |
+| $C$ | Censoring time |
+| $X = \min(T, C)$ | Observed follow-up time |
+| $\delta = I(T \le C)$ | Event indicator ($1$ = event, $0$ = right-censored) |
+| $F(t) = P(T \le t)$ | Distribution function of $T$ |
+| $S(t) = P(T > t)$ | Survivor function |
+| $f(t)$ | Probability density function of $T$ |
+| $h(t)$ | Hazard function |
+| $H(t)$ | Cumulative hazard function |
+| $t_j$ | Ordered distinct event times ($j = 1, \dots, k$) |
+| $n_j$ | Number at risk just before $t_j$ |
+| $d_j$ | Number of events at $t_j$ |
+| $c_j$ | Number censored in the interval ending at $t_j$ |
+| $\mathcal{R}(t)$ | Risk set at $t$: individuals still at risk just before $t$ |
+| $\mathbf{x}_i$ | Vector of covariates for individual $i$ |
+| $\boldsymbol{\beta}$ | Vector of regression coefficients |
+| $\eta_i = \boldsymbol{\beta}'\mathbf{x}_i$ | Linear predictor (risk score / prognostic index) |
+| $\psi = \exp(\beta)$ | Hazard ratio |
+
+## 1. Survival analysis
+
+*Fundamentals, censoring, and the three key functions* (§1.2, §1.4).
+
+Distribution function (1.1):
+
+$$F(t) = P(T \le t) = \int_0^t f(u)\,\mathrm{d}u. \qquad (1.1)$$
+
+Survivor function (1.2):
+
+$$S(t) = P(T > t) = 1 - F(t). \qquad (1.2)$$
+
+Density (from the definitions in §1.4.1):
+
+$$f(t) = \frac{\mathrm{d}F(t)}{\mathrm{d}t} = -S'(t).$$
+
+Hazard function — the instantaneous event rate among those still at risk (1.3), equal to
+the density divided by the survivor function (1.4):
+
+$$h(t) = \lim_{\delta \to 0} \frac{P(t \le T < t + \delta \mid T \ge t)}{\delta} \qquad (1.3)
+\qquad h(t) = \frac{f(t)}{S(t)}. \qquad (1.4)$$
+
+Relations linking the three functions (1.5)–(1.8):
+
+$$h(t) = -\frac{\mathrm{d}}{\mathrm{d}t}\log S(t), \qquad (1.5)$$
+$$S(t) = \exp\{-H(t)\}, \qquad (1.6)$$
+$$H(t) = \int_0^t h(u)\,\mathrm{d}u, \qquad (1.7)$$
+$$H(t) = -\log S(t). \qquad (1.8)$$
+
+Also $f(t) = h(t)\,S(t)$, which follows from (1.4).
+
+Right-censoring: we observe $X = \min(T, C)$ and $\delta = I(T \le C)$. Under
+*independent censoring*, the censoring mechanism carries no information about $T$ beyond
+the censoring time (§1.2.2).
+
+## 2. Some non-parametric procedures
+
+*Kaplan–Meier, Nelson–Aalen, the life table, standard errors, and group comparisons*
+(§2.1–2.9).
+
+Kaplan–Meier (product-limit) estimate of the survivor function (2.4):
+
+$$\hat S(t) = \prod_{t_j \le t} \left(1 - \frac{d_j}{n_j}\right) = \prod_{t_j \le t} \frac{n_j - d_j}{n_j}. \qquad (2.4)$$
+
+Nelson–Aalen estimate of the cumulative hazard, and the survivor estimate derived from
+it (2.5):
+
+$$\tilde H(t) = \sum_{t_j \le t} \frac{d_j}{n_j}, \qquad \tilde S(t) = \exp\{-\tilde H(t)\} = \prod_{t_j \le t} \exp(-d_j/n_j). \qquad (2.5)$$
+
+Life-table estimate uses the effective number at risk (2.2) in the product (2.3):
+
+$$n'_j = n_j - c_j/2 \qquad (2.2) \qquad
+\hat S(t) = \prod_{j} \left(1 - \frac{d_j}{n'_j}\right). \qquad (2.3)$$
+
+Greenwood's formula — estimated variance (2.11) and standard error (2.12) of $\hat S(t)$:
+
+$$\operatorname{var}\{\hat S(t)\} = \hat S(t)^2 \sum_{t_j \le t} \frac{d_j}{n_j(n_j - d_j)}, \qquad (2.11)$$
+$$\operatorname{se}\{\hat S(t)\} = \hat S(t) \sqrt{\sum_{t_j \le t} \frac{d_j}{n_j(n_j - d_j)}}. \qquad (2.12)$$
+
+Confidence intervals: the plain Wald interval $\hat S \pm 1.96\,\operatorname{se}$ can
+leave $[0,1]$; a log or log-log transformation is preferred in practice (§2.2.3).
+
+Estimated median survival time: the smallest $t$ for which $\hat S(t) < 0.5$ (§2.4).
+
+Log-rank test for two groups (§2.6.2). With $e_{1j} = n_{1j} d_j / n_j$ the expected
+events in group 1 under the null (2.19),
+
+$$e_{1j} = n_{1j} d_j / n_j, \qquad (2.19)$$
+$$U_L = \sum_{j} (d_{1j} - e_{1j}), \qquad (2.20)$$
+$$v_{1j} = \frac{n_{1j} n_{2j} d_j (n_j - d_j)}{n_j^2 (n_j - 1)}, \qquad (2.21)$$
+$$V_L = \sum_j v_{1j}, \qquad \frac{U_L^2}{V_L} \sim \chi^2_1. \qquad (2.23)$$
+
+The Wilcoxon test weights each contribution by $n_j$ (more sensitive to early
+differences); the Peto–Peto test weights by an estimate of $S(t)$ (preferred when
+censoring patterns differ) (§2.6.3–2.6.5). Stratified tests combine the $U$ and $V$
+contributions over strata (2.25); the log-rank test for trend uses weighted sums over
+ordered categories (2.26)–(2.27) (§2.8–2.9).
+
+## 3. The Cox regression model
+
+*The proportional hazards model, partial likelihood, and inference* (§3.1–3.14).
+
+Model for the hazard of individual $i$ (general form, 3.3):
+
+$$h_i(t) = h_0(t)\exp(\boldsymbol{\beta}'\mathbf{x}_i) = h_0(t)\exp(\eta_i). \qquad (3.3)$$
+
+The baseline hazard $h_0(t)$ is left unspecified (semi-parametric). For two treatment
+groups (3.1) gives $h_N(t) = \psi\, h_S(t)$, i.e. a constant hazard ratio
+$\psi = \exp(\beta)$.
+
+Partial likelihood (no ties); the product runs over event times with risk sets
+$\mathcal{R}(t_i)$ (3.5), with log-likelihood (3.6):
+
+$$L(\boldsymbol{\beta}) = \prod_{i : \delta_i = 1} \frac{\exp(\eta_i)}{\sum_{\ell \in \mathcal{R}(t_i)} \exp(\eta_\ell)}, \qquad (3.5)$$
+$$\log L(\boldsymbol{\beta}) = \sum_{i : \delta_i = 1} \left\{ \eta_i - \log \sum_{\ell \in \mathcal{R}(t_i)} \exp(\eta_\ell) \right\}. \qquad (3.6)$$
+
+Estimation maximises $\log L$ (Newton–Raphson using the score $U$ and information
+$I$); $\operatorname{se}(\hat\beta_j) = (I^{-1})_{jj}^{1/2}$ (§3.3.3).
+
+Hazard ratio and its confidence interval (§3.4, §3.4.1): a $100(1-\alpha)\%$ interval for
+$\beta$ is
+
+$$\hat\beta \pm z_{\alpha/2}\,\operatorname{se}(\hat\beta),$$
+
+then exponentiate to obtain the interval for $\psi$. The standard error of $\hat\psi$
+follows from (3.13):
+
+$$\operatorname{se}(\hat\psi) = \hat\psi\,\operatorname{se}(\hat\beta). \qquad (3.13)$$
+
+Model comparison (§3.5): the statistic $-2\log \hat L$ is compared between nested models,
+
+$$\Delta(-2\log \hat L) \sim \chi^2_{p - q},$$
+
+where $p - q$ is the difference in the number of parameters. Akaike's information
+criterion (3.14):
+
+$$\mathrm{AIC} = -2\log \hat L + 2q. \qquad (3.14)$$
+
+Estimated survivor function for a given covariate pattern (§3.10, 3.26):
+
+$$\hat S_i(t) = \{\hat S_0(t)\}^{\exp(\hat\eta_i)}. \qquad (3.26)$$
+
+With no covariates this reduces to the Kaplan–Meier estimate (§3.10.1).
+
+Further tools: the lasso adds the penalty $\lambda \sum_j |\beta_j|$ to the partial
+log-likelihood (3.16); fractional polynomials model non-linearity (§3.8); the
+concordance $c$-index and $R^2$-type measures assess predictive ability (§3.12);
+time-dependent ROC curves assess discrimination over time (§3.13). The Cox score test is
+identical to the log-rank test when there is a single binary covariate (§3.14).
+
+## 4. Model checking in the Cox regression model
+
+*Residuals and the proportional hazards assumption* (§4.1–4.5).
+
+Cox–Snell residuals (4.1):
+
+$$r_{Ci} = \hat H_0(t_i)\exp(\hat\eta_i) = -\log \hat S_i(t_i). \qquad (4.1)$$
+
+Martingale residuals (4.6):
+
+$$r_{Mi} = \delta_i - r_{Ci}. \qquad (4.6)$$
+
+Deviance residuals (4.7):
+
+$$r_{Di} = \operatorname{sign}(r_{Mi})\sqrt{-2\left[r_{Mi} + \delta_i\log(\delta_i - r_{Mi})\right]}. \qquad (4.7)$$
+
+Schoenfeld residuals for covariate $j$ at each event time (4.8):
+
+$$r_{Sji} = \delta_i\{x_{ji} - \hat a_{ji}\}. \qquad (4.8)$$
+
+Score residuals (4.13) are the building blocks of influence diagnostics (§4.3). The
+proportional hazards assumption is tested from the Schoenfeld residuals: under PH,
+$E(r_{Sji}) \approx \beta_j(t_i) - \hat\beta_j$ (4.18), so a systematic trend against time
+leads to the test statistic (4.19)–(4.20) (§4.4.2–4.4.3). Adding a time-dependent
+variable (4.22) is the regression-based alternative (§4.4.4).
+
+## 5. Parametric regression models
+
+*Fully parametric hazard and accelerated failure time models* (§5.1–5.17).
+
+Common distributions (hazard $h(t)$, survivor $S(t)$):
+
+| Distribution | $h(t)$ | $S(t)$ |
+|---|---|---|
+| Exponential | $\lambda$ (5.2) | $\exp(-\lambda t)$ (5.2) |
+| Weibull | $\lambda\gamma t^{\gamma-1}$ (5.4) | $\exp(-\lambda t^{\gamma})$ (5.5) |
+| Log-logistic | $\dfrac{\lambda\gamma(\lambda t)^{\gamma-1}}{1 + (\lambda t)^{\gamma}}$ (5.8) | $\dfrac{1}{1 + (\lambda t)^{\gamma}}$ (5.9) |
+| Lognormal | — (§5.1.4) | $1 - \Phi\!\left(\frac{\log t - \mu}{\sigma}\right)$ (5.10) |
+| Gompertz | $\lambda \exp(\theta t)$ (§5.1.5) | $\exp\{-\frac{\lambda}{\theta}(e^{\theta t} - 1)\}$ (§5.1.5) |
+
+Here $\lambda > 0$ is a scale and $\gamma > 0$ a shape parameter ($\gamma = 1$ recovers
+the exponential); gamma and inverse Gaussian are further options (§5.1.6–5.1.8). A
+Weibull diagnostic plot uses (5.12):
+
+$$\log\{-\log S(t)\} = \log\lambda + \gamma\log t. \qquad (5.12)$$
+
+Weibull proportional hazards model (5.42)–(5.43):
+
+$$h_i(t) = \gamma t^{\gamma-1}\exp(\boldsymbol{\beta}'\mathbf{x}_i), \qquad (5.42)$$
+$$S_i(t) = \exp\{-\exp(\boldsymbol{\beta}'\mathbf{x}_i)\,\lambda t^{\gamma}\}. \qquad (5.43)$$
+
+Accelerated failure time (AFT) models (§5.10–5.12). General hazard form (5.60) and
+log-linear form (5.61):
+
+$$h_i(t) = e^{-\eta_i}\,h_0(t/e^{\eta_i}), \qquad (5.60)$$
+$$\log T_i = \mu + \boldsymbol{\beta}'\mathbf{x}_i + \sigma W_i, \qquad (5.61)$$
+
+where $W$ has a standard distribution. The Weibull is the only distribution that is
+simultaneously PH and AFT.
+
+Proportional odds model (5.76):
+
+$$\frac{S_i(t)}{1 - S_i(t)} = e^{\eta_i}\frac{S_0(t)}{1 - S_0(t)}. \qquad (5.76)$$
+
+Cure-rate model (5.79):
+
+$$S(t) = (1 - \pi)S_n(t) + \pi. \qquad (5.79)$$
+
+## 6. Flexible parametric models
+
+*Piecewise and spline-based models* (§6.1–6.5).
+
+Piecewise exponential model: constant hazard within each interval (6.1),
+
+$$h_0(t) = \lambda_j \quad \text{on interval } j. \qquad (6.1)$$
+
+Restricted cubic spline (RCS) in $t$ (6.7)–(6.8):
+
+$$s(t) = \gamma_0 + \gamma_1 t + \sum_{j} \gamma_{j+1}\nu_j(t), \qquad (6.7)$$
+$$\nu_j(t) = (t - k_j)_+^3 - \lambda_j(t - k_{\min})_+^3 - (1 - \lambda_j)(t - k_{\max})_+^3. \qquad (6.8)$$
+
+Royston–Parmar model: the log cumulative hazard is an RCS in $y = \log t$ (6.13):
+
+$$\log H_i(t) = \eta_i + \gamma_0 + \gamma_1 y + \sum_j \gamma_{j+1}\nu_j(y). \qquad (6.13)$$
+
+## 7. Model checking in parametric models
+
+*Residuals and diagnostics for parametric models* (§7.1–7.5).
+
+Standardised residuals (7.1):
+
+$$r_{Si} = \frac{\log t_i - \hat\mu - \hat{\boldsymbol{\beta}}'\mathbf{x}_i}{\hat\sigma}. \qquad (7.1)$$
+
+Cox–Snell (7.2), martingale (7.4) and deviance (7.5) residuals carry over, now based on
+the fitted parametric $S(t)$ and $H(t)$:
+
+$$r_{Ci} = \hat H_i(t_i) = -\log \hat S_i(t_i), \qquad (7.2)$$
+$$r_{Mi} = \delta_i - r_{Ci}, \qquad (7.4)$$
+$$r_{Di} = \operatorname{sign}(r_{Mi})\sqrt{-2\left[r_{Mi} + \delta_i\log(\delta_i - r_{Mi})\right]}. \qquad (7.5)$$
+
+Fitted and observed survivor functions are compared visually (§7.3), and influential
+observations are identified from the score residuals (§7.4).
+
+## 8. Time-dependent variables
+
+*Covariates and coefficients that change over time* (§8.1–8.7).
+
+Time-dependent covariate $x(t)$ (8.1), with survivor function (8.4):
+
+$$h_i(t) = h_0(t)\exp\{\boldsymbol{\beta}'\mathbf{x}_i(t)\}, \qquad (8.1)$$
+$$S_i(t) = \exp\left[-\int_0^t \exp\{\boldsymbol{\beta}'\mathbf{x}_i(u)\}\,h_0(u)\,\mathrm{d}u\right]. \qquad (8.4)$$
+
+Time-varying coefficient $\beta(t)$ allows a covariate's effect to change over time
+(§8.1.1). Joint models couple a longitudinal submodel for repeated measurements with a
+survival submodel (8.10):
+
+$$h_i(t) = \exp\{\boldsymbol{\beta}'\mathbf{x}_i + \alpha\, m_i(t)\}\,h_0(t). \qquad (8.10)$$
+
+## 9. Interval-censored survival data
+
+*When the event time is known only up to an interval* (§9.1–9.4).
+
+The non-parametric maximum likelihood estimate (Turnbull) of $S(t)$ puts mass
+$\hat\theta_j$ on the Turnbull intervals $(a_j, b_j]$ and is (9.2):
+
+$$\hat S(t) = \prod_{t_j \le t} \hat\theta_j. \qquad (9.2)$$
+
+The likelihood for interval-censored data is (9.3):
+
+$$L = \prod_i \{S(l_i) - S(u_i)\}. \qquad (9.3)$$
+
+Semi-parametric (piecewise exponential) and parametric alternatives are described in
+§9.3–9.4.
+
+## 10. Frailty models
+
+*Unobserved heterogeneity and clustered data* (§10.1–10.8).
+
+Individual frailty $Z_i$ scales the hazard (10.2):
+
+$$h_i(t \mid Z_i) = Z_i\, h_0(t)\exp(\boldsymbol{\beta}'\mathbf{x}_i). \qquad (10.2)$$
+
+With gamma frailty $Z_i \sim \operatorname{Gamma}(1/\theta,\,1/\theta)$ (mean 1, variance
+$\theta$), the observable survivor function is (10.12):
+
+$$S_i^*(t) = \{1 + \theta^{-1}e^{\boldsymbol{\beta}'\mathbf{x}_i}H_0(t)\}^{-\theta}. \qquad (10.12)$$
+
+The shared frailty model assigns a common $Z_i$ to all members of a cluster (10.31):
+
+$$h_{ij}(t \mid Z_i) = Z_i\, h_0(t)\exp(\boldsymbol{\beta}'\mathbf{x}_{ij}). \qquad (10.31)$$
+
+## 11. Non-proportional hazards and institutional comparisons
+
+*Stratification, restricted mean survival, and random effects* (§11.1–11.4).
+
+Stratified proportional hazards model — separate baseline hazard per stratum, common
+coefficients (§11.2):
+
+$$h_{sk}(t) = h_{0k}(t)\exp(\boldsymbol{\beta}'\mathbf{x}).$$
+
+Restricted mean survival time over $[0, t_0]$ (§11.3):
+
+$$\mu(t_0) = E\{\min(T, t_0)\} = \int_0^{t_0} S(u)\,\mathrm{d}u.$$
+
+The pseudo-value for individual $i$ is (11.4):
+
+$$z_i = n\,\hat\mu(t_0) - (n-1)\,\hat\mu_{(-i)}(t_0). \qquad (11.4)$$
+
+Institutional comparisons use random-effect (frailty) or Poisson formulations, comparing
+observed to expected failures via (11.8) (§11.4).
+
+## 12. Competing risks
+
+*Cause-specific hazards and the cumulative incidence function* (§12.1–12.6).
+
+Cause-specific hazard for cause $j$ (12.1):
+
+$$\lambda_j(t) = \lim_{\delta \to 0} \frac{P(t \le T < t + \delta, K = j \mid T \ge t)}{\delta}. \qquad (12.1)$$
+
+Cumulative incidence function — the probability of an event *of cause* $j$ by time $t$
+(12.4):
+
+$$F_j(t) = \int_0^t \lambda_j(u)\, S(u)\,\mathrm{d}u, \qquad (12.4)$$
+
+estimated by (12.5):
+
+$$\hat F_j(t) = \sum_{t_i \le t} \frac{\delta_{ij}}{n_i}\,\hat S(t_{i-1}). \qquad (12.5)$$
+
+Fine–Gray subdistribution hazard (12.10) and its proportional model (12.11):
+
+$$\gamma_j(t) = -\frac{\mathrm{d}}{\mathrm{d}t}\log\{1 - F_j(t)\}, \qquad (12.10)$$
+$$\lambda_{ij}(t) = \exp(\boldsymbol{\beta}_j'\mathbf{x}_i)\,\lambda_{0j}(t). \qquad (12.11)$$
+
+Note that $1 - \sum_j F_j(t) = S(t)$; the cumulative incidence of one cause depends on
+the hazards of all causes.
+
+## 13. Multiple events and event history modelling
+
+*Counting processes and recurrent events* (§13.1–13.5).
+
+A counting process $N_i(t)$ counts events up to $t$; its intensity is (13.1), which for
+survival data reduces to the at-risk indicator times the hazard (13.4):
+
+$$\lambda_i(t)\,\mathrm{d}t = Y_i(t)\,h_i(t)\,\mathrm{d}t. \qquad (13.4)$$
+
+The martingale is $M_i(t) = N_i(t) - \Lambda_i(t)$ (13.3). Models for recurrent events:
+Anderson–Gill (13.5) and Prentice–Williams–Peterson (13.6):
+
+$$h_i(t) = Y_i(t)\exp\{\boldsymbol{\beta}'\mathbf{x}_i(t)\}\,h_0(t), \qquad (13.5)$$
+$$h_{ij}(t) = Y_{ij}(t)\exp\{\boldsymbol{\beta}_j'\mathbf{x}_i(t)\}\,h_{0j}(t). \qquad (13.6)$$
+
+Wei–Lin–Weissfeld uses marginal models per event (§13.3). Robust (sandwich) standard
+errors accommodate within-subject correlation (§13.1.4).
+
+## 14. Dependent censoring
+
+*When censoring is informative* (§14.1–14.3).
+
+Inverse probability of censoring weighting (IPCW) reweights individuals by the inverse of
+the estimated probability of remaining uncensored, obtained from a censoring model (14.3),
+entering the weighted partial likelihood (14.4):
+
+$$\hat S_{ci}(t) = \{\hat S_{c0}(t)\}^{\exp(\hat{\boldsymbol{\beta}}_c'\mathbf{x}_i)}. \qquad (14.3)$$
+
+## 15. Sample size requirements for a survival study
+
+*Number of events and number of patients* (§15.1–15.3).
+
+Required number of events (deaths) to detect a hazard ratio $\psi$ with two-sided level
+$\alpha$ and power $1-\beta$, allocation proportions $\pi_1, \pi_2$ (15.1); equal
+allocation gives (15.2):
+
+$$d = \frac{(z_{\alpha/2} + z_{\beta})^2}{\pi_1 \pi_2 \,(\log \psi)^2}, \qquad (15.1)$$
+$$d = \frac{4(z_{\alpha/2} + z_{\beta})^2}{(\log \psi)^2}. \qquad (15.2)$$
+
+The required number of patients follows by inflating for the probability of an event by
+the end of follow-up (15.10):
+
+$$n = \frac{d}{P(\text{event})}, \qquad (15.10)$$
+
+where $P(\text{event})$ is obtained from the survivor function, e.g. via Simpson's rule
+(15.11) (§15.3).
+
+## 16. Bayesian survival analysis
+
+*Priors, posteriors, and model comparison* (§16.1–16.10).
+
+Bayes' theorem for the model parameters $\boldsymbol{\theta}$ (16.4):
+
+$$p(\boldsymbol{\theta} \mid \text{data}) = \frac{L(\boldsymbol{\theta})\,p(\boldsymbol{\theta})}{\int L(\boldsymbol{\theta})\,p(\boldsymbol{\theta})\,\mathrm{d}\boldsymbol{\theta}}. \qquad (16.4)$$
+
+The likelihood for survival data is (16.5):
+
+$$L(\boldsymbol{\theta} \mid t) = \prod_i \{h_i(t_i)\}^{\delta_i}\,S_i(t_i). \qquad (16.5)$$
+
+Model comparison uses the deviance information criterion (16.15) and the widely
+applicable information criterion (16.16):
+
+$$\mathrm{DIC} = D(\bar{\boldsymbol{\theta}}) + 2p_D, \qquad (16.15)$$
+$$\mathrm{WAIC} = -2\sum_i \log p(t_i \mid t) + 2p_W. \qquad (16.16)$$
+
+## 17. Survival analysis with R
+
+*Mapping the methods to the `survival` package* (§17.1–17.16).
+
+| Task | Function |
+|---|---|
+| Create a survival object | `Surv(time, event)` |
+| Kaplan–Meier / Nelson–Aalen curves | `survfit()` |
+| Log-rank and related tests | `survdiff()` |
+| Cox regression | `coxph()` |
+| PH diagnostics and residuals | `cox.zph()`, `residuals(..., type = "...")` |
+| Parametric models (PH and AFT) | `survreg()` |
+| Flexible (Royston–Parmar) models | `flexsurv::flexsurvspline()` |
+| Competing risks (Fine–Gray) | `cmprsk::crr()` / `tidycmprsk` |
+| Kaplan–Meier plots | `ggsurvfit::ggsurvfit()` |
+
+The parametric log-linear form (17.1) and the frailty model (17.2) restate (5.61) and
+(10.2) in the notation used by `survreg` and `coxph`:
+
+$$\log T_i = \mu + \boldsymbol{\alpha}'\mathbf{x}_i + \sigma\varepsilon_i, \qquad (17.1)$$
+$$h_i(t) = z_i\exp(\boldsymbol{\beta}'\mathbf{x}_i)\,h_0(t). \qquad (17.2)$$
+
+## Appendices
+
+Appendix A summarises maximum likelihood estimation for one and several parameters
+(score, information, standard errors) — the machinery behind the estimators above.
+Appendix B lists five additional data sets (chronic active hepatitis, bladder cancer,
+black ducks, bone marrow transplantation, chronic granulomatous disease) that can be
+used for practice analyses.

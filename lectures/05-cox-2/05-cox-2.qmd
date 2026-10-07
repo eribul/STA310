@@ -1,0 +1,769 @@
+---
+title: "Lecture 5: Cox Regression II – Multivariable Models and Model Building"
+subtitle: "STA310 Survival Analysis · Collett Chapter 3"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+myeloma <- read.table(file.path(data_dir, "Survival of multiple myeloma patients.dat"), header = TRUE)
+myeloma$sex <- factor(myeloma$sex, levels = 1:2, labels = c("Male", "Female"))
+ovar <- read.table(file.path(data_dir, "Chemotherapy in ovarian cancer patients.dat"), header = TRUE)
+ovar$treat <- factor(ovar$treat, levels = 1:2, labels = c("Single", "Combination"))
+ovar$rdisease <- factor(ovar$rdisease, levels = 1:2, labels = c("Incomplete", "Complete"))
+ovar$perf <- factor(ovar$perf, levels = 1:2, labels = c("Good", "Poor"))
+prostate <- read.table(file.path(data_dir, "Comparison of two treatments for prostatic cancer.dat"), header = TRUE)
+prostate$treatment <- factor(prostate$treatment, levels = 1:2, labels = c("Placebo", "DES"))
+# pbc: randomised patients only; death = status 2
+pbc2 <- pbc |>
+  filter(!is.na(trt)) |>
+  mutate(death = as.numeric(status == 2),
+         years = time / 365.25,
+         trt = factor(trt, levels = c(2, 1), labels = c("Placebo", "D-penicillamine")),
+         sex = factor(sex, levels = c("m", "f"), labels = c("Male", "Female")),
+         stage = factor(stage),
+         edema = factor(edema, levels = c(0, 0.5, 1), labels = c("None", "Untreated/resolved", "Despite diuretics")),
+         logbili = log(bili))
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. Recap and the multivariable model
+2. Factors and dummy coding
+3. Confounding and effect modification
+4. Testing: likelihood ratio, Wald, score; AIC
+5. Model-building strategy
+6. Stratified Cox model; ties
+7. Presenting results
+8. Predicted and adjusted survival curves; concordance
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+You can
+
+- fit and interpret a Cox model with several covariates
+- code factors and interpret interactions
+- compare models with likelihood-ratio tests and AIC
+- explain why stepwise selection is problematic
+- use `strata()` and know when it is appropriate
+- report a Cox model and show predicted survival curves
+:::
+:::
+
+## Recap from Lecture 4
+
+- Cox model: $h(t \mid x) = h_0(t)\exp(\beta_1 x_1 + \dots + \beta_p x_p)$, with $h_0(t)$ unspecified
+- $\beta$ is estimated by maximising the **partial likelihood**
+- $\exp(\beta_j)$ = hazard ratio (HR) for a one-unit increase in $x_j$
+- Proportional hazards: the HR does not depend on time (checked in Lectures 6-7)
+
+**Today's question**: what changes when there are *many* covariates, and how do we choose a model?
+
+# The multivariable Cox model
+
+## Example: multiple myeloma
+
+48 patients, survival time in months (Collett's running example). 7 covariates measured at diagnosis.
+
+```{r}
+head(myeloma, 4)
+```
+
+- `age`, `bun` (blood urea nitrogen), `ca` (serum calcium), `hb` (haemoglobin), `pcells` (% plasma cells in bone marrow)
+- `sex` (1 = male, 2 = female), `protein` (Bence-Jones protein in urine: 0 = absent, 1 = present)
+
+```{r}
+n_ev <- sum(myeloma$status)
+```
+
+`r n_ev` deaths among `r nrow(myeloma)` patients.
+
+## Fitting the full model
+
+```{r}
+fit_full <- coxph(Surv(time, status) ~ age + sex + bun + ca + hb + pcells + protein,
+                  data = myeloma)
+broom::tidy(fit_full, exponentiate = TRUE, conf.int = TRUE) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+. . .
+
+Each HR is **adjusted**: the effect of one covariate with all the others held fixed.
+
+```{r}
+#| include: false
+tt <- broom::tidy(fit_full, exponentiate = TRUE, conf.int = TRUE)
+g <- function(term, col) round(tt[[col]][tt$term == term], 2)
+```
+
+## Interpreting the myeloma output
+
+- `bun`: HR `r g("bun","estimate")` (95% CI `r g("bun","conf.low")` to `r g("bun","conf.high")`) per 1 mg/100 ml. Higher urea is associated with a higher hazard of death, adjusted for the other variables.
+- `hb`: HR `r g("hb","estimate")` per 1 g/100 ml, `p` = `r round(tt$p.value[tt$term=="hb"], 2)`.
+- `protein`: HR `r g("protein","estimate")` for `protein` = 1 vs 0 (CI `r g("protein","conf.low")` to `r g("protein","conf.high")`). (presence vs absence of Bence-Jones protein). The interval is wide and includes 1, so we draw no firm clinical conclusion.
+- Most intervals are wide: with `r n_ev` events there is little precision.
+
+. . .
+
+::: {.callout-warning}
+"Not significant" is not "no effect". In a small study a clinically relevant HR can have a CI that includes 1.
+:::
+
+## Meaning of "adjusted"
+
+The model is **multiplicative** on the hazard scale. For two patients A and B
+
+$$\frac{h_A(t)}{h_B(t)} = \exp\{\beta_1 (x_{1A}-x_{1B}) + \dots + \beta_p (x_{pA}-x_{pB})\}$$
+
+- Patients who differ only in `bun` by 10 units: HR $= \exp(10\,\hat\beta_{bun})$ = `r round(exp(10*coef(fit_full)["bun"]), 2)`
+- The baseline $h_0(t)$ is the hazard for all $x_j = 0$, usually a meaningless patient (age 0): **centre** continuous covariates for interpretability, e.g. `I((age-60)/10)` gives HR per 10 years
+- Linearity on the log hazard scale is assumed for continuous covariates
+
+## Rescaling continuous covariates
+
+```{r}
+fit_sc <- coxph(Surv(time, status) ~ I(age / 10) + sex + I(bun / 10) + ca + hb + pcells + protein,
+                data = myeloma)
+broom::tidy(fit_sc, exponentiate = TRUE, conf.int = TRUE) |>
+  filter(str_detect(term, "age|bun")) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+Rescaling changes $\hat\beta$ and its SE, but not the p-value or the fit. Choose units that are clinically meaningful (10 years, 10 mg/100 ml, or an interquartile range).
+
+# Factors and dummy coding
+
+## Categorical covariates
+
+A factor with $k$ levels is represented by $k-1$ **dummy** (indicator) variables, relative to a **reference level**.
+
+Example: primary biliary cirrhosis (`survival::pbc`), randomised trial, 312 patients; death is the event. Histological stage 1-4:
+
+```{r}
+table(pbc2$stage, useNA = "ifany")
+fit_stage <- coxph(Surv(years, death) ~ stage, data = pbc2)
+broom::tidy(fit_stage, exponentiate = TRUE, conf.int = TRUE) |>
+  mutate(across(where(is.numeric), \(x) round(x, 2)))
+```
+
+## Interpreting dummy variables
+
+```{r}
+#| include: false
+ts <- broom::tidy(fit_stage, exponentiate = TRUE)
+```
+
+- Stage 1 is the reference (HR = 1 by definition).
+- Stage 4 vs stage 1: HR `r round(ts$estimate[ts$term=="stage4"], 1)`. The hazard of death is about `r round(ts$estimate[ts$term=="stage4"])` times higher.
+- Stage 4 vs stage 3 is **not** in the table: HR $= \exp(\hat\beta_4 - \hat\beta_3)$ = `r round(exp(coef(fit_stage)["stage4"] - coef(fit_stage)["stage3"]), 2)`. 
+- The p-values per dummy only compare each level to the reference. The overall test of "stage" has $k-1$ degrees of freedom:
+
+```{r}
+anova(fit_stage)
+```
+
+Use the **joint** test (LRT or Wald with 3 df) for the factor as a whole, never the individual dummy p-values.
+
+## Choice of reference level and ordered factors
+
+- Choose a large, clinically natural reference group (e.g. standard treatment, lowest risk), not the one with 2 patients.
+- The overall fit is **identical** whatever the reference.
+- If categories are ordered, a trend ($\text{stage}$ as a number, 1 df) is more parsimonious but assumes equal steps on the log hazard scale:
+
+```{r}
+fit_trend <- coxph(Surv(years, death) ~ as.numeric(stage), data = pbc2)
+c(trend_loglik = fit_trend$loglik[2], factor_loglik = fit_stage$loglik[2])
+```
+
+Compare by LRT (trend is nested in the factor model): $2\times$ difference in log likelihood = `r round(2*(fit_stage$loglik[2]-fit_trend$loglik[2]), 2)` on 2 df.
+
+## Example: ovarian cancer chemotherapy
+
+26 women, single (`Single`) vs combination chemotherapy, with age, residual disease and performance status.
+
+```{r}
+fit_ov <- coxph(Surv(time, status) ~ treat + age + rdisease + perf, data = ovar)
+fit_ov |> gtsummary::tbl_regression(exponentiate = TRUE)
+```
+
+```{r}
+#| include: false
+to <- broom::tidy(fit_ov, exponentiate = TRUE, conf.int = TRUE)
+go <- function(term, col) round(to[[col]][to$term == term], 2)
+ov_ev <- sum(ovar$status)
+```
+
+## Interpreting the ovarian cancer model
+
+- Combination vs single chemotherapy: adjusted HR `r go("treatCombination","estimate")` (95% CI `r go("treatCombination","conf.low")` to `r go("treatCombination","conf.high")`). The point estimate suggests lower hazard of death with combination therapy, but the interval is very wide.
+- `age`: HR `r go("age","estimate")` per year, i.e. `r round(exp(10*coef(fit_ov)["age"]), 1)` per 10 years.
+- Only `r ov_ev` events: we are trying to estimate 4 parameters from `r ov_ev` events, i.e. about `r round(ov_ev/4, 1)` events per variable. Results are imprecise and exploratory.
+
+# Confounding and effect modification
+
+## Two different reasons to add a covariate
+
+```{mermaid}
+%%| fig-width: 9
+flowchart LR
+  Z["Z (e.g. age)"] --> X["Exposure / treatment X"]
+  Z --> Y["Survival"]
+  X --> Y
+```
+
+**Confounding**: $Z$ is related to both exposure and outcome. Adjusting for $Z$ changes the HR of $X$. In a randomised trial, confounding is absent in expectation, but adjusting can still improve precision.
+
+**Effect modification (interaction)**: the HR of $X$ is *different* in different levels of $Z$. This is a finding to be reported, not removed.
+
+. . .
+
+*Not* to adjust for: variables on the causal path (mediators) or consequences of the outcome, if the aim is the total effect.
+
+## Checking for confounding: crude vs adjusted HR
+
+Rule of thumb: compare the HR for the exposure with and without $Z$. A clear change (say > 10-20%) suggests confounding, regardless of p-values.
+
+Myeloma, `protein` HR with different adjustments:
+
+```{r}
+f0 <- coxph(Surv(time, status) ~ protein, data = myeloma)
+f1 <- coxph(Surv(time, status) ~ protein + bun, data = myeloma)
+f2 <- coxph(Surv(time, status) ~ protein + bun + hb + ca, data = myeloma)
+map_dfr(list(crude = f0, `+ bun` = f1, `+ bun, hb, ca` = f2),
+        \(f) broom::tidy(f, exponentiate = TRUE, conf.int = TRUE) |> filter(term == "protein"),
+        .id = "model") |>
+  select(model, HR = estimate, conf.low, conf.high) |>
+  mutate(across(where(is.numeric), \(x) round(x, 2)))
+```
+
+## Interaction: model
+
+Treatment $X$ (0/1) and covariate $Z$:
+
+$$h(t) = h_0(t)\exp(\beta_1 X + \beta_2 Z + \beta_3 XZ)$$
+
+- HR of $X$ when $Z=z$: $\exp(\beta_1 + \beta_3 z)$
+- $\beta_3$: ratio of HRs, i.e. how much the log HR of $X$ changes per unit of $Z$
+- Include the main effects whenever the interaction is included (hierarchy principle)
+- Test $\beta_3 = 0$ by a Wald test or, better, an LRT comparing with the main-effects model
+- Tests of interactions have **low power**; absence of evidence for an interaction does not prove homogeneity
+
+## Example: prostate cancer, treatment by age
+
+38 patients with stage 3-4 prostate cancer, placebo vs DES (diethylstilboestrol), covariates age, serum haemoglobin `shb`, tumour `size`, Gleason `index`.
+
+```{r}
+pr_ev <- sum(prostate$status)
+with(prostate, table(treatment, status))
+```
+
+Only `r pr_ev` deaths in `r nrow(prostate)` patients: we cannot fit models with many terms here. Treatment by age:
+
+```{r}
+fit_pm <- coxph(Surv(time, status) ~ treatment + age, data = prostate)
+fit_pi <- coxph(Surv(time, status) ~ treatment * age, data = prostate)
+anova(fit_pm, fit_pi)
+```
+
+## Interpreting the prostate interaction
+
+```{r}
+#| include: false
+bi <- coef(fit_pi); Vi <- vcov(fit_pi)
+hr_age <- function(a) {
+  L <- c(1, 0, a); b <- sum(L * bi); s <- sqrt(drop(t(L) %*% Vi %*% L))
+  round(exp(c(b, b - 1.96*s, b + 1.96*s)), 2)
+}
+```
+
+- The LRT for the interaction: $\chi^2$ on 1 df, p = `r round(anova(fit_pm, fit_pi)[2, "Pr(>|Chi|)"], 2)`. No evidence of an interaction, but with `r pr_ev` events the test has almost no power.
+- The interaction model gives a DES vs placebo HR of `r hr_age(60)[1]` (CI `r hr_age(60)[2]` to `r hr_age(60)[3]`) at age 60 and `r hr_age(75)[1]` (CI `r hr_age(75)[2]` to `r hr_age(75)[3]`) at age 75: the intervals are extremely wide.
+- Lesson: a model with 3 parameters and `r pr_ev` events is already over-parameterised; the data cannot answer an effect-modification question.
+
+. . .
+
+::: {.callout-note}
+In the prostate data Collett also considers treatment by `shb`, `size` and `index`. The same logic applies.
+:::
+
+## Example with more events: PBC, treatment by oedema
+
+Use `pbc` (312 randomised patients). Does the effect of D-penicillamine differ by oedema status?
+
+```{r}
+#| include: false
+pbc_ev <- sum(pbc2$death)
+```
+
+```{r}
+fm <- coxph(Surv(years, death) ~ trt + age + logbili + edema, data = pbc2)
+fi <- coxph(Surv(years, death) ~ trt * edema + age + logbili, data = pbc2)
+anova(fm, fi)
+```
+
+```{r}
+#| include: false
+pi_p <- anova(fm, fi)[2, "Pr(>|Chi|)"]
+```
+
+- LRT of the `trt:edema` interaction (2 df): nominal p = `r round(pi_p, 2)`, with `r pbc_ev` deaths.
+- Few patients have oedema despite diuretics, so the interaction coefficients are unstable. Among many possible subgroup tests, one nominal p near 0.03 is weak evidence: treat it as hypothesis-generating, not as proof of effect modification.
+- Prespecify the few interactions you want to test.
+
+## Interactions in a forest plot: treatment by sex
+
+```{r}
+#| fig-height: 4.2
+#| output-location: column
+fs <- coxph(Surv(years, death) ~ trt * sex + age + logbili, data = pbc2)
+tidy_s <- broom::tidy(fs, exponentiate = TRUE, conf.int = TRUE)
+tidy_s |>
+  ggplot(aes(estimate, term)) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high)) +
+  geom_vline(xintercept = 1, linetype = 2) +
+  scale_x_log10() +
+  labs(x = "Hazard ratio (log scale)", y = NULL)
+```
+
+Interaction terms are ratios of HRs: read them as "difference of the log HR between groups". Always present the **HR of the treatment within each subgroup** as well.
+
+# Testing hypotheses and comparing models
+
+## Three tests from one fit
+
+Recall the likelihood-ratio, Wald and score tests from Lecture 4. Today they are used for a **subset** of $q$ coefficients, $H_0: \beta_1 = \dots = \beta_q = 0$: a factor with $q = k-1$ dummies, an interaction, or a block of covariates.
+
+- All are asymptotically $\chi^2_q$ under $H_0$ and agree in large samples with many events
+- The **LRT** needs both fits and is generally the most reliable
+- The Wald test needs only the large model and is the least reliable (e.g. with very large $|\hat\beta|$)
+- The score test needs only the small model
+
+## The three global tests in R
+
+```{r}
+summary(fit_full)$logtest
+summary(fit_full)$waldtest
+summary(fit_full)$sctest
+```
+
+All three tests the null hypothesis that **all 7 coefficients are zero**. For the myeloma model the conclusions agree: the model contains some information about survival.
+
+The single-coefficient Wald $z$-tests in the coefficient table are the usual reporting default, but for important terms confirm by an LRT.
+
+## Likelihood-ratio test for nested models
+
+Model 1 is **nested** in model 2 if it is obtained by constraining parameters of model 2.
+
+$$\text{LRT} = (-2\log\hat L_1) - (-2\log\hat L_2) \sim \chi^2_{q}$$
+
+with $q$ = difference in number of parameters. Both models must be fitted to **exactly the same patients** (watch for missing data!).
+
+```{r}
+fit_2 <- coxph(Surv(time, status) ~ bun + hb + protein, data = myeloma)
+fit_3 <- coxph(Surv(time, status) ~ bun + hb + protein + age + sex + ca + pcells,
+               data = myeloma)
+c(`-2logL (3 var)` = -2*fit_2$loglik[2], `-2logL (7 var)` = -2*fit_3$loglik[2])
+anova(fit_2, fit_3)
+```
+
+## Interpreting the LRT
+
+```{r}
+#| include: false
+an <- anova(fit_2, fit_3)
+```
+
+The difference in $-2\log \hat L$ is `r round(2*(an$loglik[2]-an$loglik[1]), 2)` on `r an$Df[2]` df, p = `r round(an[2, "Pr(>|Chi|)"], 2)`. The four additional variables (`age`, `sex`, `ca`, `pcells`) do not jointly improve the fit noticeably, so the smaller model is adequate in terms of fit.
+
+. . .
+
+::: {.callout-important}
+Never compare $-2\log \hat L$ across data sets with different numbers of patients or different handling of ties. In `survival`, `anova()` on `coxph` objects fitted to different subsets gives a warning/error.
+:::
+
+## Dropping one term at a time
+
+```{r}
+drop1(fit_full, test = "Chisq")
+```
+
+`drop1` gives, for each term, the LRT for removing it from the **full** model (and the AIC of the resulting model). It is a useful *description* of how much each variable contributes given the others, but not a licence for automatic selection.
+
+## AIC for non-nested models
+
+LRT requires nesting. For models that are not nested (e.g. `log(bun)` vs `bun`; different covariate sets):
+
+$$\text{AIC} = -2\log\hat L + 2p$$
+
+Smaller is better; rule of thumb: differences of < 2 are unimportant. BIC replaces $2p$ by $p\log(D)$, with $D$ = total number of events.
+
+```{r}
+m_a <- coxph(Surv(time, status) ~ bun + hb, data = myeloma)
+m_b <- coxph(Surv(time, status) ~ log(bun) + hb, data = myeloma)
+m_c <- coxph(Surv(time, status) ~ bun + protein, data = myeloma)
+AIC(m_a, m_b, m_c)
+```
+
+AIC is a measure of *relative* prediction quality: it says nothing about whether any model fits well. Use the same patients and the same event times in all models.
+
+## Wald vs LRT: a quick demonstration
+
+```{r}
+w <- summary(fit_stage)
+c(Wald = w$waldtest[["test"]], LRT = w$logtest[["test"]], Score = w$sctest[["test"]])
+```
+
+Here, for stage in the PBC data (3 df), the Wald test is somewhat smaller than the LRT and score tests, which are close. The discrepancy grows when there are few events in some categories (e.g. a level with 0 events gives $\hat\beta \to -\infty$ and a useless Wald test).
+
+# Model-building strategies
+
+## What is the purpose of the model?
+
+| Aim | Strategy |
+|---|---|
+| **Estimate a treatment effect** (RCT) | Prespecify adjustment for a small set of known prognostic variables |
+| **Explain / identify risk factors** | Subject-matter (causal) reasoning on confounders, then fit; report the full prespecified model |
+| **Predict** | Penalisation, validation, shrinkage; keep all clinically sensible predictors |
+
+Model building is not about getting "the best p-values". The more you search, the more your CIs and p-values are too optimistic.
+
+## Stepwise selection: what is the problem?
+
+Forward, backward, or both directions, using p-values or AIC (`step()` works with `coxph`).
+
+Known problems:
+
+- p-values, CIs and the final $\chi^2$ are **biased** (we selected the winners); coefficients are biased away from zero
+- Unstable: small data changes give different models
+- Ignores subject-matter knowledge, collinearity problems, forces false certainty
+- Low power for real effects, and "noise" variables enter by chance when there are many candidates
+
+. . .
+
+Collett (Section 3.6) presents stepwise procedures as an exploratory tool. Today's modern view: use them, if at all, to *generate hypotheses*, and be honest in the report.
+
+## Events per variable (EPV)
+
+Estimation of $\beta$ in Cox models is reliable only when there are enough **events** (not patients): rule of thumb **at least about 10 events per candidate parameter**, more is better (all dummies and interactions counted, also those that were screened and dropped).
+
+```{r}
+tibble(data = c("Myeloma", "Ovarian", "Prostate", "PBC"),
+       events = c(sum(myeloma$status), sum(ovar$status), sum(prostate$status), sum(pbc2$death)),
+       patients = c(nrow(myeloma), nrow(ovar), nrow(prostate), nrow(pbc2)),
+       max_params = floor(events / 10))
+```
+
+The myeloma data (`r n_ev` events) support about `r floor(n_ev/10)` parameters by this rule, yet we have 7 candidate variables: the full model is already "too large" and results are a teaching illustration.
+
+## Suggested workflow
+
+1. Define the question and the **estimand** (treatment effect? risk model?)
+2. Prespecify a limited set of covariates from subject-matter knowledge and previous literature, respecting EPV
+3. Examine data: missingness, distributions, collinearity, KM curves of key factors
+4. Fit the prespecified model; check PH and functional form (Lectures 6-7)
+5. Test only a few prespecified interactions
+6. Report **all** models fitted and how the final one was chosen
+
+If you do select variables: use the LRT (not Wald p-values), liberal inclusion level (e.g. 0.10-0.20 for confounders), include variables of known importance regardless of p-value, and validate (bootstrap).
+
+## Myeloma: a step-by-step example (Collett)
+
+Univariate screening, one covariate at a time, via LRT:
+
+```{r}
+vars <- c("age", "sex", "bun", "ca", "hb", "pcells", "protein")
+tibble(variable = vars) |>
+  mutate(fit = map(variable, \(v) coxph(as.formula(paste("Surv(time, status) ~", v)), data = myeloma)),
+         HR = map_dbl(fit, \(f) exp(coef(f))[1]),
+         LRT = map_dbl(fit, \(f) 2 * diff(f$loglik)),
+         p = pchisq(LRT, 1, lower.tail = FALSE)) |>
+  select(-fit) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+Univariable screening has pitfalls (a variable can be important only after adjustment), but it indicates what a model might hold.
+
+## Myeloma: backward elimination (illustration)
+
+```{r}
+step_fit <- step(fit_full, trace = 0)
+formula(step_fit)
+```
+
+```{r}
+#| include: false
+sf <- formula(step_fit)
+```
+
+AIC-based backward selection ends with `r deparse(sf[[3]])`. The data-driven result is plausible, but:
+
+- check against the full model: do HRs of retained variables change much?
+- the CIs below are **conditional** on the selection, hence too narrow
+
+```{r}
+broom::tidy(step_fit, exponentiate = TRUE, conf.int = TRUE) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+## Medical interpretation of the myeloma model
+
+- Higher blood urea nitrogen (poorer kidney function) is the most informative predictor of death.
+- Lower haemoglobin (anaemia) is associated with a higher hazard (HR below 1 per g/100 ml), but the CI is borderline.
+- `protein` (present vs absent) has an HR below 1 with a CI including 1: a direction that is perhaps unexpected clinically, but compatible with chance in this small sample, so no clinical conclusion is drawn.
+- Age, sex, calcium and plasma cell percentage add little *given* the other variables in this sample of 48. That does not mean they have no relation to survival (e.g. calcium and BUN are correlated).
+
+. . .
+
+::: {.callout-warning}
+Keep the HR interpretation "association", not "causal effect". Treatment was not randomised here: these are prognostic factors.
+:::
+
+## Lasso: a penalised alternative (one slide)
+
+Penalised Cox regression (**lasso**) maximises $\ell(\beta) - \lambda\sum_j |\beta_j|$. It shrinks coefficients and sets some exactly to zero; $\lambda$ chosen by cross-validation. Useful for many candidate predictors (prediction), less so for estimating a specific adjusted HR (the shrunken $\hat\beta$ are biased, no simple CIs).
+
+```{r}
+#| eval: false
+library(glmnet)
+x <- model.matrix(~ age + sex + bun + ca + hb + pcells + protein, data = myeloma)[, -1]
+y <- with(myeloma, Surv(time, status))
+cv <- cv.glmnet(x, y, family = "cox", alpha = 1)
+coef(cv, s = "lambda.1se")
+```
+
+See Collett Section 3.7. Not run here (`glmnet` is not part of the course set-up).
+
+## Continuous covariates: a teaser
+
+The default assumes a **linear** effect of $x$ on $\log h$. Alternatives for non-linearity:
+
+- transformations (`log(bili)`), categorising (loses information, avoid)
+- splines: `pspline(x)` in `survival`, or `rcs(x, 4)` in `rms`
+
+```{r}
+#| eval: false
+coxph(Surv(years, death) ~ pspline(age) + trt, data = pbc2)
+rms::cph(Surv(years, death) ~ rms::rcs(age, 4) + trt, data = pbc2)
+```
+
+How to **detect** non-linearity (martingale residuals) comes in Lectures 6-7.
+
+# Stratified Cox model
+
+## Stratification: idea
+
+Allow **different baseline hazards** in $m$ strata, but a **common** $\beta$:
+
+$$h_g(t \mid x) = h_{0g}(t)\exp(\beta' x), \quad g = 1,\dots,m$$
+
+- Partial likelihood is the product over strata; no assumption of proportional hazards *between* strata
+- No HR for the stratifying variable is estimated: you "adjust it away"
+- Use when a factor (a) **violates PH** and is not of direct interest, or (b) is a **nuisance** (centre, matched sets, age group)
+- Assumes that the covariate effects $\beta$ are the same in all strata (can be tested via an interaction)
+
+## Stratify vs include as covariate
+
+| | covariate `factor(z)` | `strata(z)` |
+|---|---|---|
+| Baseline hazards | proportional (HR constant over time) | arbitrary, separate |
+| HR for $z$ | estimated | not estimated |
+| Parameters | $k - 1$ | none |
+| Best when | $z$ is of interest, PH plausible | $z$ is nuisance or PH violated |
+| Cost | | loss of efficiency; no test of $z$ |
+
+## Example: PBC, edema as stratum
+
+```{r}
+f_cov <- coxph(Surv(years, death) ~ trt + age + logbili + edema, data = pbc2)
+f_str <- coxph(Surv(years, death) ~ trt + age + logbili + strata(edema), data = pbc2)
+bind_rows(`edema as covariate` = broom::tidy(f_cov, exponentiate = TRUE, conf.int = TRUE),
+          `edema as stratum` = broom::tidy(f_str, exponentiate = TRUE, conf.int = TRUE),
+          .id = "model") |>
+  select(model, term, HR = estimate, conf.low, conf.high) |>
+  mutate(across(where(is.numeric), \(x) round(x, 2)))
+```
+
+The HRs for `trt`, `age` and `logbili` are similar; the stratified model gives no HR for oedema, but allows its effect to change over time.
+
+## Stratified baseline survival
+
+```{r}
+#| fig-height: 4.2
+#| output-location: column
+survfit(f_str, newdata = data.frame(trt = "Placebo", age = 50, logbili = log(1.4))) |>
+  broom::tidy() |>
+  ggplot(aes(time, estimate, colour = strata)) +
+  geom_step(linewidth = 1) +
+  labs(x = "Years", y = "Predicted survival", colour = "Oedema") +
+  scale_y_continuous(limits = c(0, 1))
+```
+
+The curves are not proportional to each other: each stratum has its own $\hat h_{0g}$. (Few patients in `Despite diuretics`: noisy.)
+
+## Stratified analysis: pitfalls
+
+::: {.callout-warning}
+- Too many strata (small strata) leads to loss of information. A strata with no events contributes nothing.
+- A **continuous** variable must be grouped first, and then you lose the effect size.
+- A stratified model does not allow predictive comparison *between* strata via HR; use survival curves.
+- To test whether treatment effect differs among strata, add `trt:strata(z)` interactions.
+:::
+
+# Ties
+
+## Ties in event times (recap)
+
+Lecture 4 introduced the Efron (R default), Breslow and exact approximations. In practice the choice matters little:
+
+```{r}
+sapply(c("breslow", "efron", "exact"), \(tt)
+  coef(coxph(Surv(time, status) ~ bun + hb + protein, data = myeloma, ties = tt))) |>
+  round(4)
+```
+
+With few ties the methods agree. Report the method used.
+
+# Presenting results
+
+## A table for a paper
+
+```{r}
+fit_pub <- coxph(Surv(time, status) ~ I(age / 10) + sex + bun + hb + protein, data = myeloma)
+fit_pub |>
+  gtsummary::tbl_regression(
+    exponentiate = TRUE,
+    label = list(`I(age/10)` ~ "Age (per 10 years)", sex ~ "Sex",
+                 bun ~ "BUN (per unit)", hb ~ "Haemoglobin (per g/100ml)",
+                 protein ~ "Bence-Jones protein")) |>
+  gtsummary::add_global_p()
+```
+
+## A forest plot
+
+```{r}
+#| fig-height: 4
+broom::tidy(fit_full, exponentiate = TRUE, conf.int = TRUE) |>
+  ggplot(aes(estimate, fct_rev(fct_inorder(term)))) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high)) +
+  geom_vline(xintercept = 1, linetype = 2) +
+  scale_x_log10() +
+  labs(x = "Adjusted hazard ratio (log scale)", y = NULL,
+       caption = "Myeloma, full model; 95% CI; covariates on different scales")
+```
+
+Caution: HRs for variables on different scales are not directly comparable. Use standardised or clinically meaningful units.
+
+## Reporting guidance
+
+State in the methods and results:
+
+- Number of patients and **events**, follow-up (reverse KM), handling of missing data
+- Covariates, how they were chosen, coding/units, and reference levels
+- Adjusted **HR with 95% CI** (not only p-values), and the number of parameters
+- Ties method, test type (LRT/Wald), software
+- Checks of PH and linearity (Lecture 6-7)
+- Absolute risks/survival curves, not only HRs
+- Be explicit about whether associations are causal or prognostic
+
+# Predicted survival and discrimination
+
+## Predicted survival for covariate patterns
+
+$$\hat S(t \mid x) = \hat S_0(t)^{\exp(\hat\beta' x)}$$
+
+where $\hat S_0$ is the estimated baseline survival (Breslow-type estimator). In R: `survfit(fit, newdata = ...)` with one row per covariate pattern. Choose patterns that are clinically meaningful.
+
+## Predicted survival: myeloma example
+
+```{r}
+#| fig-height: 4.3
+fit_m <- coxph(Surv(time, status) ~ bun + hb + protein, data = myeloma)
+nd <- data.frame(bun = c(15, 15, 40, 40), hb = 10, protein = c(0, 1, 0, 1)) |>
+  mutate(pattern = paste0("BUN ", bun, ", ", ifelse(protein == 1, "protein+", "protein-")))
+sf <- survfit(fit_m, newdata = nd)
+sm <- summary(sf, times = seq(0, 80, by = 1))
+tibble(time = rep(sm$time, ncol(sm$surv)),
+       surv = c(sm$surv),
+       pattern = rep(nd$pattern, each = length(sm$time))) |>
+  ggplot(aes(time, surv, colour = pattern)) +
+  geom_step(linewidth = 1) +
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(x = "Months since diagnosis", y = "Predicted survival", colour = NULL)
+```
+
+```{r}
+#| include: false
+s24 <- summary(sf, times = 24)$surv
+```
+
+Predicted 24-month survival ranges from `r round(min(s24), 2)` to `r round(max(s24), 2)` over these four patterns. The pattern with low BUN and no protein has the best prognosis. Curves are model-based and depend on PH and linearity.
+
+## Adjusted survival curves
+
+Plotting the KM curve of a group shows **crude** survival. The model-based **adjusted** (risk-adjusted, Collett Section 3.11) curve for group $g$ averages predictions with the group's covariates set to a common population:
+
+$$\hat S_g(t) = \frac{1}{n}\sum_{i=1}^n \hat S(t \mid x_i,\ g)$$
+
+```{r}
+#| fig-height: 4
+adj <- map_dfr(levels(pbc2$edema), \(g) {
+  nd <- pbc2 |> mutate(edema = factor(g, levels = levels(pbc2$edema)))
+  s <- summary(survfit(f_cov, newdata = nd), times = seq(0, 12, by = 0.25))
+  tibble(edema = g, time = s$time, surv = rowMeans(s$surv))
+})
+ggplot(adj, aes(time, surv, colour = edema)) + geom_step(linewidth = 1) +
+  labs(x = "Years", y = "Adjusted survival", colour = "Oedema")
+```
+
+## Concordance (c-index)
+
+Harrell's $C$ was defined in Lecture 4 (0.5 = coin toss, 1 = perfect ranking by the linear predictor $\hat\eta_i$); validation of it follows in Lecture 7.
+
+```{r}
+c(myeloma = summary(fit_full)$concordance[1],
+  ovarian = summary(fit_ov)$concordance[1],
+  pbc = summary(f_cov)$concordance[1]) |> round(2)
+```
+
+- Measures **discrimination**; not calibration
+- Depends on case-mix and censoring; optimistic when computed on the data used for fitting
+- For an **explanatory** model (estimating an adjusted HR) a high $C$ is not the goal: a strong confounder adjustment can lower or leave unchanged $C$. Report it, if at all, for prediction models, with validation.
+
+# Wrap up
+
+## In-class exercise (10 min)
+
+Use `survival::pbc` (variables as in `pbc2`: `years`, `death`, `trt`, `age`, `logbili`, `edema`, `albumin`).
+
+1. Fit a Cox model with `trt`, `age`, `logbili` and `albumin`. Interpret the HR of `albumin` per 1 g/dl, and of `age` per 10 years.
+2. Test whether `edema` improves the model, using the LRT (watch for missing data!).
+3. Does the HR for `trt` change when you adjust for `logbili`? Is that confounding?
+4. Fit the model stratified on `edema` instead. What changes?
+5. How many events per parameter do you have?
+
+## Take-home messages
+
+- Multivariable Cox models give **adjusted HRs**; interpret each with the others fixed and in meaningful units
+- A factor with $k$ levels needs $k-1$ dummies; test it **jointly**
+- Distinguish confounding (adjust) from effect modification (interaction, report by group)
+- Nested models: LRT; non-nested: AIC. Wald and score agree with LRT in large samples
+- Stepwise selection is unreliable; prefer prespecified models, about **10 events per parameter**
+- `strata()` for nuisance factors or PH violations, at the cost of no HR for the stratum factor
+- Show absolute predicted survival curves, not only HRs; the c-index is for prediction, not explanation
+
+**Take-home exercise**: for the ovarian data fit `treat + age + rdisease + perf`. Compare with the model with `treat + age` using an LRT, then with `strata(rdisease)`. Write a short results paragraph (3-4 sentences) for a clinical journal.
+
+**Next lecture**: Model checking I: residuals and the proportional hazards assumption.
+
+**Reading**: Collett, Chapter 3 (Sections 3.1-3.6, 3.9-3.12; skim 3.7 on lasso, 3.8 on non-linear terms).

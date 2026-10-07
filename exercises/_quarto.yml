@@ -1,0 +1,21 @@
+project:
+  type: default
+
+# Single-source: each chapter .qmd renders to a questions PDF (default profile)
+# and a solutions PDF (--profile solutions).
+profile:
+  default: questions
+  group:
+    - [questions, solutions]
+
+filters:
+  - _solutions.lua
+
+format:
+  typst:
+    toc: true
+    number-sections: true
+
+execute:
+  warning: false
+  message: false

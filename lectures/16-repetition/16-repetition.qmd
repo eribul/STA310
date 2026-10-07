@@ -1,0 +1,686 @@
+---
+title: "Lecture 16: Repetition and Preparation for the Exam"
+subtitle: "STA310 Survival Analysis · Collett Chapters 1-5 and 8, 11-13 (core)"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+lung$dead <- as.numeric(lung$status == 2)       # survival::lung codes 1 = censored, 2 = dead
+lung$sex <- factor(lung$sex, 1:2, c("Male", "Female"))
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. Map of the course and decision guide
+2. Recap per block (formula, pitfall, R)
+3. Read the output: practice
+4. Calculation practice
+5. True or false
+6. Reporting and typical mistakes
+7. The exam
+:::
+::: {.column width="45%"}
+**How to use these slides for self-study**
+
+- Cover the answer, answer the question, then press the next key (`. . .` reveals)
+- All numbers in the text are computed by the code on the slide
+- Keep the **formula sheet** (`formula-sheet.qmd` / `.pdf`) open; it has all formulas, numbered as in Collett
+- Re-run the code yourself and change it
+:::
+:::
+
+# The map
+
+## Map of the course: from research question to method
+
+```{mermaid}
+%%| fig-width: 11
+flowchart LR
+  Q["Time-to-event data<br/>(L1: origin, event, censoring, S, h, H)"] --> D["Describe / compare groups"]
+  Q --> R["Adjust, several covariates"]
+  Q --> A["Complications"]
+  D --> KM["Kaplan-Meier, Nelson-Aalen (L2)"]
+  D --> LR["Log-rank, Wilcoxon, stratified (L3)"]
+  R --> COX["Cox PH model (L4-5)"]
+  COX --> CHK["Residuals, PH, influence, form (L6-7)"]
+  R --> PAR["Weibull, AFT (L8)<br/>flexible parametric (L9)"]
+  A --> TD["Covariate changes over time (L10)"]
+  A --> NPH["Non-PH: RMST, time-varying effects,<br/>institutions (L11)"]
+  A --> CR["Competing risks (L12-13)"]
+  A --> REC["Recurrent events (L14)"]
+  A --> OV["Interval censoring, frailty,<br/>sample size (L15)"]
+```
+
+## Decision guide: which method for which question?
+
+| Question / situation | Method | Key output |
+|---|---|---|
+| Survival probability at 1 or 5 years, median | Kaplan-Meier | $\hat S(t)$, CI, median |
+| Shape of the hazard over time | Nelson-Aalen, smoothed hazard | $\hat H(t)$ |
+| Two or more groups, no adjustment | Log-rank (early differences: Wilcoxon-type) | $p$-value |
+| Groups, adjusting for a confounder | Stratified log-rank, Cox | HR |
+| Effect of several covariates | Cox PH model | HR with CI |
+| Need absolute predictions, extrapolation, smooth $h(t)$ | Weibull / flexible parametric | $S(t)$, time ratio, HR |
+| Covariate that changes (treatment received later, biomarker) | Time-dependent covariate, counting process data | HR |
+| Hazards not proportional | Stratify, time-varying effect, RMST | RMST difference |
+| Death from another cause prevents the event | Cause-specific hazards **and** CIF (Fine-Gray) | CSH ratio, SHR, CIF |
+| Repeated events per patient | AG, PWP, frailty; MCF | HR, MCF |
+| Event known only to lie in an interval | Interval-censored methods | $\hat S(t)$ |
+
+## Choosing a method: questions to ask yourself
+
+1. What are origin, event and time scale? Who is censored and why?
+2. Is the aim **description**, **comparison**, **prediction** or **causal-type** effect estimation?
+3. One event type per patient, or competing / repeated events?
+4. Are covariates fixed at baseline?
+5. Are the assumptions (independent censoring, PH, functional form) plausible and checked?
+6. Is the sample large enough (number of **events**)?
+
+::: {.callout-tip}
+In the exam, "choose the method" questions are answered by: design $\rightarrow$ data structure $\rightarrow$ estimand $\rightarrow$ method $\rightarrow$ assumption to check.
+:::
+
+# Recap by block
+
+## Block 1: Basics (L1)
+
+- $S(t)=P(T>t)$, $h(t)=\lim_{\Delta\to 0} P(t\le T<t+\Delta\mid T\ge t)/\Delta$, $H(t)=\int_0^t h(u)\,du$
+- $$S(t)=\exp\{-H(t)\}, \qquad h(t) = \frac{f(t)}{S(t)} = -\frac{d}{dt}\log S(t)$$
+- Right censoring: we know $T > c$. Must be **independent** (non-informative) of the event process.
+
+::: {.callout-warning}
+## Pitfall
+The hazard is a **rate**, not a probability: it can exceed 1 (depends on the time unit). It is also conditional on being event-free.
+:::
+
+```{r}
+#| eval: false
+Surv(time, status)          # Surv object; "+" marks censored
+```
+
+## Block 2: Kaplan-Meier and Nelson-Aalen (L2)
+
+$$\hat S(t)=\prod_{t_{(j)}\le t}\left(1-\frac{d_j}{n_j}\right), \qquad \hat H(t)=\sum_{t_{(j)}\le t}\frac{d_j}{n_j}$$
+
+- Greenwood: $\widehat{\mathrm{Var}}\{\hat S(t)\}=\hat S(t)^2\sum_{t_{(j)}\le t}\frac{d_j}{n_j(n_j-d_j)}$; use log-log CI; median = smallest $t$ with $\hat S(t)\le 0.5$
+- Reverse KM (swap status) estimates the **follow-up** time
+
+::: {.callout-warning}
+## Pitfall
+The median is *not* the median of observed times, and the "mean survival" is not estimable without restriction when the last observation is censored.
+:::
+
+```{r}
+fit <- survfit(Surv(time, dead) ~ 1, data = lung)
+fit
+```
+
+## Block 3: Tests for comparing groups (L3)
+
+Log-rank: at each event time compare observed with expected in group 1, $E_{1j}=d_j n_{1j}/n_j$ and $V_j=\dfrac{n_{1j}n_{2j}d_j(n_j-d_j)}{n_j^2(n_j-1)}$:
+
+$$\chi^2 = \frac{(O_1-E_1)^2}{V_1}\ \sim\ \chi^2_{G-1}\ \text{under } H_0:\ S_1=S_2$$
+
+- Most powerful for **proportional hazards**; Wilcoxon / Tarone-Ware weight early times more
+- Stratified test: compare within strata, add up $O-E$ and $V$
+- A test gives a $p$-value, **no effect size**
+
+::: {.callout-warning}
+## Pitfall
+Not significant does not mean "no difference". Crossing curves: log-rank may have no power.
+:::
+
+```{r}
+#| eval: false
+survdiff(Surv(time, dead) ~ sex + strata(inst), data = lung)
+```
+
+## Block 4: Cox regression (L4-5)
+
+$$h(t\mid x)=h_0(t)e^{\eta}, \qquad \eta=\beta' x=\beta_1x_1+\dots+\beta_px_p, \qquad \text{HR } \psi=\exp(\beta)$$
+
+- $h_0(t)$ unspecified; $\beta$ estimated by **partial likelihood**
+- $\psi=\exp(\beta)$: HR for one unit increase in $x$, **other covariates held fixed**
+- Nested models: likelihood ratio test, $-2\log \hat L$ difference $\sim\chi^2_{\text{df}}$
+- Stratification: separate $h_{0k}(t)$ per stratum, common $\beta$
+- Model building: clinical knowledge first, events per variable, avoid purely automatic selection
+
+::: {.callout-warning}
+## Pitfall
+HR is a ratio of **rates**, not of risks. A HR of 2 does not mean "twice as likely to die by 5 years" and does not mean "dies twice as fast".
+:::
+
+## Block 4: R snippet
+
+```{r}
+cox <- coxph(Surv(time, dead) ~ age + sex + ph.ecog, data = lung)
+gtsummary::tbl_regression(cox, exponentiate = TRUE)
+```
+
+```{r}
+#| eval: false
+anova(cox_small, cox)                        # likelihood ratio test of nested models
+coxph(Surv(time, dead) ~ age + strata(sex), data = lung)   # stratified
+```
+
+## Block 5: Model checking (L6-7)
+
+| Aspect | Tool |
+|---|---|
+| Proportional hazards | Scaled Schoenfeld residuals, `cox.zph()`; log-log plot; time interaction |
+| Functional form of a continuous covariate | Martingale residuals vs $x$; splines (`pspline`, `rcs`) |
+| Outliers / overall fit | Deviance residuals, Cox-Snell residuals (should look like Exp(1)) |
+| Influence | dfbeta, `residuals(type = "dfbeta")` |
+
+::: {.callout-warning}
+## Pitfall
+A non-significant `cox.zph` test does **not** prove PH, particularly with few events. A significant test with a huge data set may be a trivial deviation. Look at the plot.
+:::
+
+```{r}
+#| eval: false
+cox.zph(cox); plot(cox.zph(cox)); residuals(cox, type = "martingale")
+```
+
+## Block 6: Parametric models (L8-9)
+
+Weibull: $h(t)=\lambda\gamma t^{\gamma-1}$, $S(t)=\exp(-\lambda t^\gamma)$; $\gamma>1$ increasing, $\gamma<1$ decreasing hazard, $\gamma=1$ exponential.
+
+- **PH form**: $h(t\mid x)=\lambda e^{\beta' x}\gamma t^{\gamma-1}$, effect = HR
+- **AFT form**: $\log T=\eta+\sigma W$, $\eta=\mu+\beta' x$, effect $e^{\beta}$ = **time ratio** (acceleration factor)
+- Weibull (and exponential) is the only family that is both PH and AFT
+- Other families: log-logistic (AFT + proportional odds), log-normal (AFT), Gompertz (PH, increasing hazard)
+- Flexible parametric (Royston-Parmar): $\log H_i(t)=\eta_i + s(\log t)$ with spline $s$; allows time-varying effects and extrapolation with care
+
+::: {.callout-warning}
+## Pitfall
+`survreg` reports **AFT** coefficients: $e^{\beta}>1$ means *longer* survival, the opposite sign to a log HR.
+:::
+
+## Block 7: Time-dependent covariates (L10)
+
+- Data in **counting process** form: `Surv(start, stop, event)`, one row per interval of constant covariate value
+- $h(t\mid x(t))=h_0(t)\exp\{\beta x(t)\}$: compare patients at risk **at the same time $t$** using covariate values known at $t$
+- **Immortal time bias**: classifying patients by a future event (e.g. "received transplant") gives that group guaranteed event-free time
+
+```{r}
+head(heart, 4)
+coxph(Surv(start, stop, event) ~ transplant + age, data = heart) |> broom::tidy(exponentiate = TRUE)
+```
+
+::: {.callout-warning}
+## Pitfall
+Using the "ever transplanted" indicator from baseline instead of the time-dependent version. Also: a time-dependent covariate cannot be used for plotting ordinary KM curves.
+:::
+
+## Block 8: Non-proportional hazards (L11)
+
+- Options: **stratify** (if the variable is not of interest), **time-varying effect** ($\beta(t)$, e.g. step function or $\beta\,g(t)$), **restricted mean survival time**
+- $\text{RMST}(\tau)=\int_0^\tau S(t)\,dt$: area under the curve up to $\tau$; difference interpretable as mean time gained
+- Institutional comparison: adjust for case mix, compare observed and expected deaths, funnel plot; random effect/shrinkage for small centres
+
+```{r}
+rmst <- function(f, tau) summary(f, rmean = tau)$table[, "rmean"]
+rmst(survfit(Surv(time, dead) ~ sex, data = lung), 600)
+```
+
+::: {.callout-warning}
+## Pitfall
+Reporting a single HR when hazards cross. The HR then is a weighted average with a weight that depends on the censoring.
+:::
+
+## Block 9: Competing risks (L12-13)
+
+- **Cause-specific hazard** $h_k(t)$: rate of cause $k$ among those still event-free. Estimate with Cox, censoring other causes. Answers an **aetiological** question.
+- **Cumulative incidence function** $\mathrm{CIF}_k(t)=\int_0^t S(u^-)h_k(u)\,du$: absolute risk of cause $k$. Estimated by Aalen-Johansen, **not** $1-\text{KM}$.
+- **Fine-Gray**: model for the subdistribution hazard $h_k^{\mathrm{sub}}(t)$; keeps those who failed from other causes in the risk set. Answers a **prediction** question about the CIF.
+
+::: {.callout-warning}
+## Pitfall
+$1-\text{KM}$ with other causes treated as censored **overestimates** the cumulative incidence. A covariate can raise the cause-specific hazard of $k$ yet lower the CIF of another cause.
+:::
+
+## Block 9: R snippet (mgus2)
+
+```{r}
+mg <- mgus2 |>
+  mutate(etime = ifelse(pstat == 1, ptime, futime),
+         event = factor(case_when(pstat == 1 ~ 1, death == 1 ~ 2, TRUE ~ 0),
+                        0:2, c("censor", "progression", "death")))
+tidycmprsk::cuminc(Surv(etime, event) ~ sex, data = mg) |>
+  tidycmprsk::tidy(times = c(120, 240)) |> filter(outcome == "progression")
+```
+
+```{r}
+#| eval: false
+coxph(Surv(etime, event == "progression") ~ age + sex, data = mg)          # cause-specific
+tidycmprsk::crr(Surv(etime, event) ~ age + sex, data = mg, failcode = "progression")  # Fine-Gray
+```
+
+## Block 10: Recurrent events (L14)
+
+| Model | Time scale | Risk set | Use |
+|---|---|---|---|
+| Andersen-Gill (AG) | calendar (since origin) | all patients under observation | common baseline rate, robust SE (`cluster(id)`) |
+| PWP total time | since origin | only for event $k$ after $k-1$ | event-specific, ordered |
+| PWP gap time | since previous event | as above | renewal-type |
+| WLW | calendar (since origin) | everyone at risk for every event from time 0 | marginal, event-specific $\beta_k$ |
+| Frailty | | | unobserved heterogeneity |
+
+- **MCF** $M(t)$ (mean cumulative function): expected number of events per patient by time $t$, handles censoring
+
+::: {.callout-warning}
+## Pitfall
+Treating recurrences as independent without robust standard errors, or analysing only the first event and calling it "recurrent event analysis".
+:::
+
+```{r}
+coxph(Surv(tstart, tstop, status) ~ treat + cluster(id), data = cgd) |> broom::tidy(exponentiate = TRUE)
+```
+
+## Block 11: Overview topics (L15)
+
+- **Interval censoring**: event known only to lie in $(L,R]$; ignoring it (using the midpoint) biases the results, NPMLE (Turnbull) for $\hat S$
+- **Frailty**: random effect $z$ multiplies the hazard, $h_i(t)=z_i h_0(t)e^{\beta'x_i}$, $\mathrm{Var}(z_i)=\theta$; explains clustering; marginal and conditional HR differ
+- **Sample size**: driven by the **number of events**, not the number of patients
+
+$$d=\frac{4\,(z_{\alpha/2}+z_\beta)^2}{(\log\psi)^2}\qquad (\text{equal allocation, Collett 15.2})$$
+
+# Read the output
+
+## Output 1: survfit print
+
+```{r}
+survfit(Surv(time, dead) ~ sex, data = lung)
+```
+
+**What can you say?**
+
+. . .
+
+```{r}
+#| include: false
+sf <- summary(survfit(Surv(time, dead) ~ sex, data = lung))$table
+```
+
+- `r sf[1, "events"]` of `r sf[1, "records"]` men and `r sf[2, "events"]` of `r sf[2, "records"]` women died. Median survival: `r sf[1, "median"]` days (men) vs `r sf[2, "median"]` days (women), with 95% CIs `r sf[1, "0.95LCL"]`-`r sf[1, "0.95UCL"]` and `r sf[2, "0.95LCL"]`-`r sf[2, "0.95UCL"]`.
+- The CIs do not overlap, suggesting longer survival in women; formal test needs `survdiff` or Cox. No adjustment for confounders.
+
+## Output 2: survdiff
+
+```{r}
+sd <- survdiff(Surv(time, dead) ~ sex, data = lung)
+sd
+```
+
+**What can you say?**
+
+. . .
+
+- Observed deaths: men `r sd$obs[1]` vs expected `r round(sd$exp[1], 1)` under $H_0$; women `r sd$obs[2]` vs `r round(sd$exp[2], 1)`.
+- $\chi^2=$ `r round(sd$chisq, 2)` on 1 df, $p=$ `r signif(pchisq(sd$chisq, 1, lower.tail = FALSE), 2)`: evidence against equal survival curves. The test gives **no effect size** and assumes (for power) proportional hazards.
+
+## Output 3: coxph summary
+
+```{r}
+cox <- coxph(Surv(time, dead) ~ age + sex + ph.ecog, data = lung)
+summary(cox)
+```
+
+**What can you say?**
+
+. . .
+
+```{r}
+#| include: false
+ci <- summary(cox)$conf.int
+```
+
+- Women have `r round(ci["sexFemale", "exp(coef)"], 2)` times the hazard of men (95% CI `r round(ci["sexFemale", "lower .95"], 2)`-`r round(ci["sexFemale", "upper .95"], 2)`), adjusted for age and ECOG score: a `r round(100 * (1 - ci["sexFemale", "exp(coef)"]))`% lower hazard.
+- Each extra ECOG point: HR `r round(ci["ph.ecog", "exp(coef)"], 2)`. Age: HR `r round(ci["age", "exp(coef)"], 3)` per year, i.e. `r round(ci["age", "exp(coef)"]^10, 2)` per 10 years.
+- `r cox$n` patients used (`r length(cox$na.action)` dropped for missing values), `r cox$nevent` events. Concordance `r round(summary(cox)$concordance[1], 2)`. The global LR, Wald and score tests test $H_0$: all $\beta=0$.
+
+## Output 4: cox.zph
+
+```{r}
+zph <- cox.zph(cox)
+zph
+```
+
+**What can you say?**
+
+. . .
+
+- No individual test has $p<0.05$ (smallest: `r rownames(zph$table)[which.min(zph$table[rownames(zph$table) != "GLOBAL", "p"])]`, $p=$ `r round(min(zph$table[rownames(zph$table) != "GLOBAL", "p"]), 3)`); global $p=$ `r round(zph$table["GLOBAL", "p"], 3)`.
+- No evidence against PH, but this is not proof (`r cox$nevent` events, limited power). Complement with `plot(zph)`: is the smoothed $\beta(t)$ flat?
+- If violated: stratify, add a time interaction, or use RMST.
+
+## Output 5: survreg (Weibull AFT)
+
+```{r}
+wb <- survreg(Surv(time, dead) ~ age + sex, data = lung, dist = "weibull")
+summary(wb)
+```
+
+**What can you say?**
+
+. . .
+
+```{r}
+#| include: false
+b <- coef(wb)
+```
+
+- AFT scale: women's time ratio is $e^{`r round(b["sexFemale"], 2)`}=$ `r round(exp(b["sexFemale"]), 2)`: survival times are stretched by about `r round(100 * (exp(b["sexFemale"]) - 1))`% (age fixed).
+- `Log(scale)` = `r round(log(wb$scale), 2)`, so shape $\gamma = 1/$ `r round(wb$scale, 2)` = `r round(1 / wb$scale, 2)` $>1$: hazard increasing in time.
+- Converting to PH: $\log\text{HR}=-\beta/\sigma$, i.e. HR for women = `r round(exp(-b["sexFemale"] / wb$scale), 2)` (compare Cox).
+
+## Output 6: flexsurvreg
+
+```{r}
+fl <- flexsurv::flexsurvreg(Surv(time, dead) ~ age + sex, data = lung, dist = "weibull")
+fl
+```
+
+**What can you say?**
+
+. . .
+
+- `shape` = `r round(fl$res["shape", "est"], 2)` ($>1$) and `scale` = `r round(fl$res["scale", "est"], 0)` (intercept on the time scale). `flexsurvreg` uses the **AFT** parameterisation for `weibull` (`exp(est)` of a covariate coefficient is a time ratio): female `exp(est)` = `r round(exp(fl$res["sexFemale", "est"]), 2)`, consistent with `survreg`.
+- `weibullPH` would give the HR directly. AIC = `r round(fl$AIC, 1)` can compare with, e.g., `dist = "lnorm"` or a spline model (`k = 2`).
+
+## Output 7: competing risks (tidycmprsk)
+
+```{r}
+cr <- tidycmprsk::crr(Surv(etime, event) ~ age + sex, data = mg, failcode = "progression")
+cr
+```
+
+**What can you say?**
+
+. . .
+
+```{r}
+#| include: false
+crt <- tidycmprsk::tidy(cr, exponentiate = TRUE, conf.int = TRUE)
+```
+
+- Outcome: progression to plasma cell malignancy, with death as competing event. Subdistribution HR for males vs females: `r round(crt$estimate[crt$term == "sexM"], 2)` (CI `r round(crt$conf.low[crt$term == "sexM"], 2)`-`r round(crt$conf.high[crt$term == "sexM"], 2)`), age: `r round(crt$estimate[crt$term == "age"], 3)` per year.
+- This is an effect on the **cumulative incidence**, including the effect via the competing death. For the biological effect on the rate of progression use the cause-specific Cox model.
+- The SHR is **not** a risk ratio either.
+
+## Output 8: a CIF (cuminc) and the 1-KM trap
+
+```{r}
+ci_fit <- tidycmprsk::cuminc(Surv(etime, event) ~ 1, data = mg)
+naive <- survfit(Surv(etime, event == "progression") ~ 1, data = mg)
+tibble(
+  month = c(120, 240, 360),
+  CIF = tidycmprsk::tidy(ci_fit, times = month) |> filter(outcome == "progression") |> pull(estimate),
+  one_minus_KM = 1 - summary(naive, times = month)$surv
+) |> mutate(across(-month, \(x) round(x, 3)))
+```
+
+. . .
+
+`1 - KM` is larger than the CIF at every time point: it behaves as if those who died could still progress later.
+
+# Calculation practice
+
+## Calculation 1: Kaplan-Meier by hand
+
+Times (months): 2, 3+, 4, 4, 6+, 7, 9+ ($+$ = censored). Estimate $\hat S(4)$ and $\hat S(7)$.
+
+. . .
+
+| $t_{(j)}$ | $n_j$ | $d_j$ | $1-d_j/n_j$ | $\hat S$ |
+|---|---|---|---|---|
+| 2 | 7 | 1 | 6/7 | 0.857 |
+| 4 | 5 | 2 | 3/5 | 0.514 |
+| 7 | 2 | 1 | 1/2 | 0.257 |
+
+. . .
+
+Check in R:
+
+```{r}
+tt <- Surv(c(2, 3, 4, 4, 6, 7, 9), c(1, 0, 1, 1, 0, 1, 0))
+summary(survfit(tt ~ 1))$surv |> round(3)
+```
+
+Note $n$ at $t=4$ is 5: the 3+ has left. The censored 9+ does not change the curve.
+
+## Calculation 2: log-rank expected counts
+
+At one event time: group A has $n_A = 10$, group B has $n_B=15$, and $d=2$ events in total. Expected events in A and the variance contribution?
+
+. . .
+
+$$E_A=d\,\frac{n_A}{n}=2\cdot\frac{10}{25}=\textbf{0.8}, \qquad V_A=\frac{d\,(n_A/n)(n_B/n)(n-d)}{n-1}=\frac{2\cdot 0.4\cdot 0.6\cdot 23}{24}=\textbf{`r round(2*0.4*0.6*23/24, 3)`}$$
+
+Sum $E_A$ and $V_A$ over all event times; $\chi^2=(O_A-E_A)^2/V_A$ on 1 df. If $O_A=7$ and $E_A=4.5$, $V_A=2.5$: $\chi^2=$ `r round((7-4.5)^2/2.5, 2)`, $p=$ `r round(pchisq((7-4.5)^2/2.5, 1, lower.tail = FALSE), 3)`.
+
+## Calculation 3: hazard ratio from coefficients
+
+Cox model: $\hat\beta_{\text{treat}} = -0.45$, $\text{se}=0.18$. Give HR and 95% CI. Then for $\hat\beta_{\text{age}}=0.02$ per year: HR for 10 years?
+
+. . .
+
+```{r}
+b <- -0.45; se <- 0.18
+round(exp(c(HR = b, lower = b - 1.96 * se, upper = b + 1.96 * se)), 2)
+round(exp(10 * 0.02), 2)
+```
+
+CI is computed on the log scale, then exponentiated (asymmetric). The CI excludes 1 so the Wald $p<0.05$. Wald $z=$ `r round(b/se, 2)`.
+
+## Calculation 4: relation $S=\exp(-H)$
+
+(a) $H(2)=0.69$. What is $S(2)$? (b) $S(5)=0.30$. What is $H(5)$? (c) Hazard ratio 2: $S_1(t)=0.8$, what is $S_2(t)$?
+
+. . .
+
+- (a) $S(2)=e^{-0.69}=$ `r round(exp(-0.69), 2)`
+- (b) $H(5)=-\log 0.30=$ `r round(-log(0.30), 2)`
+- (c) Under PH, $S_2(t)=S_1(t)^{\text{HR}}=0.8^2=$ `r 0.8^2`. Note: this is **not** $2\times$ the risk of death: risk goes from `r 1-0.8` to `r round(1-0.8^2, 2)`.
+
+## Calculation 5: Weibull median
+
+$S(t)=\exp(-\lambda t^\gamma)$ with $\lambda=0.01$, $\gamma=1.5$ (time in years). Median?
+
+. . .
+
+$$S(t_{med})=0.5 \Rightarrow \lambda t^\gamma=\log 2 \Rightarrow t_{med}=\left(\frac{\log 2}{\lambda}\right)^{1/\gamma}=\left(\frac{0.693}{0.01}\right)^{1/1.5}=\textbf{`r round((log(2)/0.01)^(1/1.5), 2)`}\text{ years}$$
+
+With a hazard ratio of 2 (PH, same $\gamma$): $\lambda\to 0.02$, median $=$ `r round((log(2)/0.02)^(1/1.5), 2)`. The ratio of medians is $2^{-1/\gamma}=$ `r round(2^(-1/1.5), 2)` = the time ratio.
+
+## Calculation 6: events needed (Schoenfeld)
+
+Detect $\psi=0.7$, two-sided $\alpha=0.05$, power 80%, equal allocation. Number of events? How many patients if 40% are expected to have an event?
+
+. . .
+
+```{r}
+d <- 4 * (qnorm(0.975) + qnorm(0.80))^2 / log(0.7)^2
+c(events = ceiling(d), patients = ceiling(d / 0.4))
+```
+
+Power depends on the **events**, not on $n$. Detecting $\psi=0.5$ needs only `r ceiling(4 * (qnorm(0.975) + qnorm(0.80))^2 / log(0.5)^2)` events.
+
+## Exercise (in class)
+
+Using `veteran`: fit a Cox model for `Surv(time, status) ~ trt + karno + celltype`, then
+
+1. Interpret the HR of `trt`. Is it adjusted? For what?
+2. Check PH with `cox.zph`. Which variable is the problem?
+3. What would you do about it? (stratify? time-varying effect? RMST?)
+
+```{r}
+#| eval: false
+vfit <- coxph(Surv(time, status) ~ trt + karno + celltype, data = veteran)
+summary(vfit); cox.zph(vfit)
+```
+
+# True or false?
+
+## Statements 1-2
+
+1. "A hazard ratio of 0.5 means that the risk of dying by 5 years is halved."
+
+. . .
+
+**False.** The HR is a ratio of instantaneous rates. With $S_1(5)=0.8$ and HR $=0.5$ the survival is $0.8^{0.5}=$ `r round(0.8^0.5, 2)`, so the risks are `r 1-0.8` and `r round(1-0.8^0.5, 3)`: risk ratio `r round((1-0.8^0.5)/0.2, 2)`.
+
+2. "With competing risks, $1-\text{KM}$ for the event of interest is a valid estimate of its cumulative incidence."
+
+. . .
+
+**False** (overestimates it). Use the Aalen-Johansen/CIF estimator. $1-\text{KM}$ answers a hypothetical question (no competing events).
+
+## Statements 3-4
+
+3. "Censoring is acceptable as long as fewer than 10% of patients are censored."
+
+. . .
+
+**False.** What matters is that censoring is **independent** of prognosis (given covariates), not its proportion. Dropout of the sickest patients biases KM even if it is rare. Untestable from the data.
+
+4. "If the log-rank test gives $p=0.30$, the survival curves are the same."
+
+. . .
+
+**False.** Absence of evidence is not evidence of absence. Look at the CI of the HR. Also the log-rank test has low power for crossing curves.
+
+## Statements 5-6
+
+5. "A non-significant `cox.zph` test shows that the hazards are proportional."
+
+. . .
+
+**False.** It only fails to detect a violation, especially with few events. Check the plots, think about the biology.
+
+6. "Immortal time bias arises when patients are classified by a treatment received during follow-up and analysed as if they had it from time zero."
+
+. . .
+
+**True.** The treated group cannot die before treatment starts, which gives artificially good survival. Remedy: time-dependent covariate or landmark analysis.
+
+## Statements 7-8
+
+7. "In a Cox model, the baseline hazard $h_0(t)$ must be specified (e.g. Weibull) to estimate $\beta$."
+
+. . .
+
+**False.** Partial likelihood eliminates $h_0(t)$. Only for absolute predictions do we estimate it.
+
+8. "A covariate with a large effect on the cause-specific hazard of death from cancer also has the same effect on the cumulative incidence of cancer death."
+
+. . .
+
+**False.** The CIF also depends on the hazards of the competing events. Fine-Gray and cause-specific effects can differ in size and even sign.
+
+## Statements 9-10
+
+9. "In the Weibull AFT model, a time ratio of 1.5 means that the hazard is 1.5 times higher."
+
+. . .
+
+**False.** A time ratio $>1$ means *longer* survival (time is stretched by 1.5). Under PH, HR $=\text{TR}^{-\gamma}$, with $\gamma$ the Weibull shape.
+
+10. "The number of patients, not the number of events, determines the power of a log-rank test."
+
+. . .
+
+**False.** Power is determined by the number of events (and the HR and allocation). Many patients with few events give little power.
+
+# Reporting
+
+## How to report a survival analysis
+
+::: {.columns}
+::: {.column width="50%"}
+**Methods**
+
+- Study design, population, **time origin**, event, time scale
+- How censoring occurred; follow-up (reverse KM)
+- Estimation: KM, medians with CI, test used
+- Model: covariates and why, handling of missing data, continuous covariates (form)
+- Checks: PH, form, influence
+- Competing events and how handled
+- Software and packages
+:::
+::: {.column width="50%"}
+**Results**
+
+- Numbers: patients, events, censored; **table 1**
+- KM curves with **risk table**, CIs
+- Effects as HR (or time ratio, SHR, RMST) with **95% CI**, not only $p$
+- Say if estimates are **adjusted**, and for what
+- Assumption checks and what you did about problems
+- Absolute risk (survival probability, CIF) alongside the relative measure
+- Limitations
+:::
+:::
+
+## Typical mistakes
+
+- Wrong or unclear time origin; wrong coding of `status`
+- $1-\text{KM}$ with competing risks; "survival rate" as `1 - deaths/n`
+- Interpreting HR as risk ratio or as "times faster"
+- Concluding "no difference" from a non-significant test
+- Baseline classification by future events (immortal time bias)
+- Not checking PH, or accepting a non-significant `cox.zph` as proof
+- Too many covariates for the number of **events** (rule of thumb: at least 10 events per parameter)
+- Stepwise selection reported as if it were confirmatory
+- Mixing AFT and PH interpretation for `survreg`
+- Interpreting a "causal" effect from observational data without confounding control
+- Extrapolating a parametric model beyond the data
+- Ignoring clustering/repeated events (no robust SE or frailty)
+
+# The exam
+
+## Exam format and study tips
+
+::: {.callout-important}
+## Practical information: TO BE FILLED IN
+- Date and time: **[to be confirmed; planned 17 January 2027]**
+- Place / platform (digital exam): **[to be confirmed]**
+- Aids permitted: **[to be confirmed: formula sheet? calculator? R?]**
+- Grading limits and registration: **[to be confirmed]**
+:::
+
+- Written, digital, 4 hp. Mixture of **conceptual questions, interpretation of R output, short calculations**
+- The goals tested: basic concepts; non-, semi- and parametric models and tests; purpose of advanced methods; visualising and interpreting survival curves; formulating, estimating and evaluating regression models; **choosing a method** from design and question and reflecting on the evidence
+
+**Study tips**
+
+1. Redo the exercises and labs; interpret each output **in a sentence with a number**
+2. Make your own one-page summary; learn the formula sheet's structure so you find things fast
+3. Practise reading output: what is the event, which group is the reference, which scale (HR or TR)?
+4. For every method, memorise **assumption, what you check it with, what you do if it fails**
+5. Read Collett Chapters 1-5, 8, 11-13 (core); the rest is overview
+
+## Take-home messages
+
+- Define origin, event, censoring first; the rest follows
+- KM and log-rank describe, Cox and parametric models explain and predict; check assumptions
+- HR is not a risk ratio; $1-\text{KM}$ is not the CIF; non-significant is not "no effect"
+- Complications (time-dependent covariates, non-PH, competing and recurrent events) change the **method and the estimand**
+
+**Reading**: Collett Chapters 1-5, 8, 11-13; formula sheet `formula-sheet.qmd`.
+
+**Good luck!**
+
+## Questions? {.center}
+
+Thank you for the course.

@@ -1,0 +1,93 @@
+---
+title: "Chapter N: <Chapter title> — Exercises"
+subtitle: "STA310 Survival Analysis (Master's in Applied Biostatistics)"
+lang: en
+solutions: false
+---
+
+<!--
+  HOW TO USE THIS TEMPLATE
+  - Copy to chapter-NN/chapter-NN.qmd and set the title.
+  - All student-facing text is written in ENGLISH (course language).
+  - Split the chapter into sections (## headings) when it spans several topics.
+  - Each exercise is a ### heading (auto-numbered via number-sections). Put the
+    question type on a separate italic line right below the heading:
+        *Type: Concept & notation*
+  - Sub-parts are a lettered list: write (a), (b), (c) on their own lines, with a
+    blank line before the list.
+  - Scope: exercises for chapter N may only use chapters 1-N (never later). Mix
+    chapter-local questions with cumulative ones; mark a cumulative question with
+    an extra line right below the type:  *Builds on: Chapters X-Y*
+  - Target 10-14 exercises per chapter. See the skill sta310-exercise-authoring
+    for the full question-type catalogue and the per-chapter mix.
+
+  SINGLE SOURCE
+  - Write the model answer directly under each exercise, wrapped in
+        ::: {.content-visible when-profile="solutions"}
+        **Solution.**
+        (a) ...
+        :::
+  - Render both PDFs with:  ./render.sh chapter-NN   (or ./render.sh for all).
+
+  QUESTION TYPE TAGS (pick and mix)
+  Concept & notation               True / false with justification
+  Interpret R output               Interpret figure
+  Method selection                 Assumptions
+  Diagnostics & model critique     What's wrong here?
+  What if ...?                     From research question to model
+  From model to research question  Code reading
+  Code completion                  Mini-lab
+  Model comparison                 Simulation-based intuition
+  Risk set reasoning               Time scale & estimand
+
+  R CODE
+  - Show output and figures as fixed content. Execute code only in Mini-labs and
+    simulation exercises, using a chunk with `#| echo: true`.
+  - Interpretations/conclusions matter more than the code itself.
+-->
+
+<!-- 1-3 sentence introduction to the chapter (no heading). -->
+
+## <Section topic>
+
+<!-- Map to book sections X.Y-X.Z. -->
+
+### <Exercise title>
+
+*Type: Concept & notation*
+
+Question body.
+
+(a) First sub-part.
+(b) Second sub-part.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Model answer.
+(b) Model answer.
+:::
+
+### <Exercise title>
+
+*Type: Mini-lab*
+
+<!-- A small dataset or slice; the student runs R and answers 3-5 interpretation
+     questions. -->
+
+```{r}
+#| echo: true
+# code here
+```
+
+(a) First sub-part.
+(b) Second sub-part.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Model answer.
+(b) Model answer.
+:::
+
+<!-- Add more exercises of the other types as the mix requires. -->

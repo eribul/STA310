@@ -1,0 +1,547 @@
+---
+title: "Lecture 14: Multiple events and event history modelling"
+subtitle: "STA310 Survival Analysis · Collett Chapter 13"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+rats <- read.table(file.path(data_dir, "Recurrence of mammary tumours in female rats.dat"), header = TRUE)
+rats$treatment <- factor(rats$treatment, levels = 0:1, labels = c("Control", "Retinoid"))
+bladder_first <- read.table(file.path(data_dir, "Recurrence of bladder cancer.dat"), header = TRUE)
+
+# cgd: events beyond the 4th are pooled into stratum 4 for PWP
+cgd$enum4 <- pmin(cgd$enum, 4)
+# bladder2: counting-process layout, rx 1 = placebo, 2 = thiotepa
+bladder2$trt <- factor(bladder2$rx, levels = 1:2, labels = c("Placebo", "Thiotepa"))
+bladder2$enum4 <- pmin(bladder2$enum, 4)
+n_bladder <- n_distinct(bladder2$id)
+max_enum_bladder <- max(bladder2$enum)
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. Recurrent events: why and how?
+2. Counting-process data layout
+3. Andersen-Gill (AG) model
+4. PWP and WLW models; which to choose?
+5. Mean cumulative function
+6. Terminal events, frailty (pointer)
+7. Multi-state models and event history
+8. Exercise, take-home
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+After today you can
+
+- set up recurrent event data in start-stop format
+- fit and interpret AG and PWP models with robust standard errors
+- choose a model from the research question
+- plot a mean cumulative function
+- explain why death in a recurrent-event setting is a competing risk
+:::
+:::
+
+# Why multiple events?
+
+## Many diseases do not "happen once"
+
+| Setting | Repeated event |
+|---|---|
+| Chronic granulomatous disease | Serious infections |
+| Bladder cancer | Tumour recurrences |
+| Heart failure, COPD | Hospitalisations |
+| Epilepsy | Seizures |
+| Animal carcinogenesis | Mammary tumours |
+
+. . .
+
+So far each subject contributed **at most one** event. Now a subject can have $0, 1, 2, \dots$ events, and the same subject appears repeatedly in the data.
+
+## Two naive approaches, both flawed
+
+::: {.columns}
+::: {.column width="50%"}
+**1. Time to first event only (ordinary Cox)**
+
+- Valid, simple
+- But throws away all information after the first event
+- Answers only "does treatment delay the *first* event?"
+:::
+::: {.column width="50%"}
+**2. Treat every event as an independent subject**
+
+- Uses all the data
+- But events within the same patient are **correlated** (some patients are simply more prone)
+- Model-based standard errors are then wrong, usually too small
+:::
+:::
+
+. . .
+
+::: {.callout-important}
+Goal: use **all events** and get **valid standard errors** under within-subject dependence.
+:::
+
+## Example 1: chronic granulomatous disease (CGD)
+
+Randomised trial of interferon gamma (rIFN-g) vs placebo to prevent serious infections in patients with CGD (the data set `cgd` from the `survival` package, `survival::cgd`). One row per **at-risk interval**. Column names of counting-process data vary between packages and data sets (`start`/`stop` here in `bladder2`, `tstart`/`tstop` in `cgd`), as noted in Lecture 10.
+
+```{r}
+cgd |> select(id, treat, tstart, tstop, status, enum) |> head(10)
+```
+
+```{r}
+cgd |> count(id) |> summarise(patients = n(), events = sum(cgd$status), max_rows = max(n))
+```
+
+Patient 1 had infections at days 219 and 373 and was censored at day 414; patient 2 had `r sum(cgd$status[cgd$id == 2])` infections (the last at day `r max(cgd$tstop[cgd$id == 2 & cgd$status == 1])`) and was censored at day `r max(cgd$tstop[cgd$id == 2])`.
+
+## Example 2: bladder cancer
+
+Trial of thiotepa vs placebo after transurethral resection of superficial bladder tumours (`survival::bladder2`; `r n_bladder` patients, rows are at-risk intervals for up to `r max_enum_bladder` recurrences, times in months).
+
+```{r}
+bladder2 |> select(id, rx, number, size, start, stop, event, enum) |> head(8)
+```
+
+Patient 5 had a recurrence at month 6 and was censored at month 10. Here `rx` is 1 = placebo, 2 = thiotepa, `number` = initial number of tumours, `size` = size of the largest.
+
+## Example 3: mammary tumours in rats (Collett Example 13.2)
+
+48 rats randomised to retinoid prophylaxis or control, followed 122 days; times to each tumour.
+
+```{r}
+rats |> filter(rat == 5)
+rats |> summarise(rats = n_distinct(rat), tumours = sum(status), .by = treatment)
+```
+
+Time is **time since randomisation** (calendar time): rat 5 had tumours at days 70, 74, 85, 92 and was censored at 122.
+
+# The counting-process formulation
+
+## Counting process and intensity
+
+For subject $i$, let $N_i(t)$ = number of events up to time $t$, and $Y_i(t) \in \{0,1\}$ = 1 while the subject is under observation.
+
+The **intensity** is the hazard of the next event given the history (Collett's $\lambda$); we keep the symbol $h_i(t)$:
+
+$$h_i(t) = \lim_{\delta \to 0} \frac{P\{\text{event in } [t, t+\delta) \mid \text{history up to } t\}}{\delta}.$$
+
+Models take the form $h_i(t) = Y_i(t)\, h_0(t) \exp(\beta' x_i)$, and the partial likelihood is the Cox one, with each *interval* contributing to the risk sets while it is at risk.
+
+## Data layout: one row per at-risk interval
+
+Subject with events at times $t_1 < t_2$ and censored at $c$:
+
+| id | start | stop | event | enum |
+|---|---|---|---|---|
+| 1 | 0 | $t_1$ | 1 | 1 |
+| 1 | $t_1$ | $t_2$ | 1 | 2 |
+| 1 | $t_2$ | $c$ | 0 | 3 |
+
+- `Surv(start, stop, event)`: introduced in lecture 10 for time-dependent covariates
+- Intervals do not overlap; a subject is at risk only in the interval where the row applies
+- The last row ends with censoring (status 0) when follow-up continues after the last event
+
+## Building the layout from raw data: the rats
+
+The rats file has one row per tumour, with total times. We create `start` as the previous stop within a rat.
+
+```{r}
+rats_cp <- rats |>
+  group_by(rat) |>
+  mutate(start = lag(time, default = 0), enum = row_number()) |>
+  ungroup()
+rats_cp |> filter(rat %in% c(3, 5)) |> select(rat, treatment, start, stop = time, status, enum)
+```
+
+::: {.callout-note}
+In this file a few tumours at the same assessment have been separated by adding $0.1$ to ties (Collett), so that start < stop always. Check `all(rats_cp$time > rats_cp$start)`: `r all(rats_cp$time > rats_cp$start)`.
+:::
+
+## Calendar (total) time vs gap time
+
+::: {.columns}
+::: {.column width="50%"}
+**Total (calendar) time**
+
+- Clock runs from the origin (randomisation) and is **not reset**
+- Row: `Surv(start, stop, event)`
+- Question: what is the event rate at time $t$ since randomisation?
+:::
+::: {.column width="50%"}
+**Gap time**
+
+- Clock **resets to 0** after each event
+- Row: `Surv(stop - start, event)`
+- Question: how long to the next event after the previous one?
+:::
+:::
+
+. . .
+
+Both use the same data; only the time scale of the baseline hazard differs. With gap time the risk sets contain only patients at the same time *since their last event*.
+
+```{r}
+cgd |> mutate(gap = tstop - tstart) |> select(id, tstart, tstop, gap, status, enum) |> head(5)
+```
+
+# Models for recurrent events
+
+## Overview of the three classical models
+
+| Model | Baseline hazard | Risk set for event $k$ | Time scale |
+|---|---|---|---|
+| **AG** (Andersen-Gill) | common to all events | everyone under observation | total time |
+| **PWP** (Prentice, Williams, Peterson) | stratum-specific $h_{0k}(t)$ | only those who have had $k-1$ events | total or gap time |
+| **WLW** (Wei, Lin, Weissfeld) | stratum-specific, marginal | everyone is at risk for every event from time 0 | total time |
+
+All are fitted with `coxph()` and need **robust** variance (`cluster(id)`) because events within a subject are correlated.
+
+## Step 1: ordinary Cox on time to first event
+
+```{r}
+first <- cgd |> filter(enum == 1)
+fit_first <- coxph(Surv(tstop, status) ~ treat, data = first)
+broom::tidy(fit_first, exponentiate = TRUE, conf.int = TRUE) |> select(term, estimate, std.error, conf.low, conf.high, p.value)
+```
+
+Time to first infection: hazard ratio `r round(exp(coef(fit_first)), 2)` for rIFN-g vs placebo, using `r nrow(first)` patients and `r sum(first$status)` events. Of the `r sum(cgd$status)` infections in the trial, only these are used.
+
+## The Andersen-Gill model
+
+$$h_i(t) = Y_i(t)\, h_0(t) \exp(\beta' x_i)$$
+
+- **One** baseline hazard $h_0(t)$, identical for all events of all subjects
+- After adjusting for covariates, events are **conditionally independent** (the number of earlier events does not affect later hazards)
+- $\exp(\beta)$ = ratio of event **rates** (intensities) at any time
+- Fitted by Cox regression on the counting-process data; use **robust sandwich variance**, since conditional independence rarely holds exactly
+
+## AG in R: CGD
+
+```{r}
+fit_ag_naive <- coxph(Surv(tstart, tstop, status) ~ treat, data = cgd)
+fit_ag <- coxph(Surv(tstart, tstop, status) ~ treat + cluster(id), data = cgd)
+fit_ag
+```
+
+`cluster(id)` switches the reported SE to the robust one (column `robust se`); the model-based `se(coef)` is kept for comparison.
+
+## AG: interpretation
+
+The AG rate ratio for rIFN-g vs placebo is `r round(exp(coef(fit_ag)), 2)` (95% CI `r round(exp(confint(fit_ag)), 2) |> paste(collapse = " to ")`).
+
+- Interferon gamma is associated with a roughly `r round(100 * (1 - exp(coef(fit_ag))))`% lower rate of serious infections at any time, averaged over all infection episodes
+- Robust SE `r round(sqrt(vcov(fit_ag)), 3)` vs naive SE `r round(sqrt(vcov(fit_ag_naive)), 3)`. Here the robust SE is larger, as is typical when events cluster within patients
+- Time to first infection gives a similar HR (`r round(exp(coef(fit_first)), 2)`), but with `r sum(first$status)` instead of `r sum(cgd$status)` events
+
+::: {.callout-warning}
+The estimate averages over episodes. It does not say whether the effect is the same for the 1st and the 3rd infection.
+:::
+
+## The PWP model
+
+Conditional on having had $k-1$ events, stratify by event number $k$:
+
+$$h_{ik}(t) = Y_{ik}(t)\, h_{0k}(t) \exp(\beta' x_i)$$
+
+- A subject is at risk for event $k$ only after event $k-1$ has occurred: **ordered** events
+- **Stratified** baseline: the hazard may differ for event 1, 2, 3, ...
+- $\beta$ common across strata (or interact with stratum to get event-specific effects)
+- Two time scales: **total time** (`Surv(start, stop, ...)`) or **gap time** (`Surv(stop - start, ...)`)
+- Sparse high event numbers: pool the last strata (here events $\ge 4$ form stratum 4)
+
+## PWP in R: CGD
+
+```{r}
+fit_pwp_tt <- coxph(Surv(tstart, tstop, status) ~ treat + strata(enum4) + cluster(id), data = cgd)
+fit_pwp_gt <- coxph(Surv(tstop - tstart, status) ~ treat + strata(enum4) + cluster(id), data = cgd)
+```
+
+```{r}
+#| output-location: column
+bind_rows(
+  `PWP total time` = broom::tidy(fit_pwp_tt, exponentiate = TRUE, conf.int = TRUE),
+  `PWP gap time`   = broom::tidy(fit_pwp_gt, exponentiate = TRUE, conf.int = TRUE),
+  .id = "model") |>
+  select(model, HR = estimate, `robust SE (log)` = robust.se, conf.low, conf.high) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+## Comparing the approaches: CGD
+
+```{r}
+get <- function(f, label) {
+  s <- summary(f)$coefficients
+  tibble(model = label, HR = exp(s[1, "coef"]),
+         se_naive = s[1, "se(coef)"],
+         se_robust = if ("robust se" %in% colnames(s)) s[1, "robust se"] else NA,
+         lower = exp(confint(f)[1]), upper = exp(confint(f)[2]))
+}
+bind_rows(get(fit_first, "First event only"),
+          get(fit_ag_naive, "AG, naive SE"),
+          get(fit_ag, "AG, robust SE"),
+          get(fit_pwp_tt, "PWP total time"),
+          get(fit_pwp_gt, "PWP gap time")) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3))) |> knitr::kable()
+```
+
+## CGD: what do we learn?
+
+- All models point to a **lower infection hazard on rIFN-g** (HRs from `r round(min(exp(coef(fit_ag)), exp(coef(fit_pwp_tt)), exp(coef(fit_pwp_gt)), exp(coef(fit_first))), 2)` to `r round(max(exp(coef(fit_ag)), exp(coef(fit_pwp_tt)), exp(coef(fit_pwp_gt)), exp(coef(fit_first))), 2)`)
+- The AG estimate is farther from 1 than PWP. A possible reason: PWP compares patients with the same number of earlier infections, so part of the treatment effect that works through earlier infections is removed. Differences are small relative to the CIs
+- Using recurrent events (AG) increases the number of events and gives a narrower CI than first event only
+- Robust vs naive SE: always report the robust one
+
+. . .
+
+::: {.callout-note}
+Different models estimate **different quantities**. They are not expected to agree exactly.
+:::
+
+## Bladder cancer: the same workflow
+
+```{r}
+fit_b_first <- coxph(Surv(stop, event) ~ trt + number + size, data = filter(bladder2, enum == 1))
+fit_b_ag    <- coxph(Surv(start, stop, event) ~ trt + number + size + cluster(id), data = bladder2)
+fit_b_pwp   <- coxph(Surv(start, stop, event) ~ trt + number + size + strata(enum4) + cluster(id), data = bladder2)
+fit_b_pwpg  <- coxph(Surv(stop - start, event) ~ trt + number + size + strata(enum4) + cluster(id), data = bladder2)
+```
+
+```{r}
+list(`First event` = fit_b_first, AG = fit_b_ag, `PWP total` = fit_b_pwp, `PWP gap` = fit_b_pwpg) |>
+  map_dfr(\(f) broom::tidy(f, exponentiate = TRUE, conf.int = TRUE) |> filter(term == "trtThiotepa"), .id = "model") |>
+  select(model, HR = estimate, conf.low, conf.high, p.value) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3))) |> knitr::kable()
+```
+
+## Bladder cancer: interpretation
+
+The `bladder2` data have `r sum(bladder2$event)` recurrences in `r n_distinct(bladder2$id)` patients (at most `r max_enum_bladder` per patient are recorded).
+
+- Thiotepa vs placebo, AG: rate ratio `r round(exp(coef(fit_b_ag))["trtThiotepa"], 2)`; first event only: `r round(exp(coef(fit_b_first))["trtThiotepa"], 2)`
+- The 95% CIs of all four models include 1 (see table): weak evidence of a benefit, and the point estimates attenuate from AG to PWP gap time
+- Initial number of tumours (`number`): HR `r round(exp(coef(fit_b_ag))["number"], 2)` per additional tumour (AG)
+
+::: {.callout-warning}
+Small trial (`r n_bladder` patients): CIs are wide, and conclusions differ in their *interpretation* by model, not just numerically.
+:::
+
+## The book's first-recurrence bladder data
+
+The first-recurrence version of the bladder data in the book's data sets (`r nrow(bladder_first)` rows; `init` = initial number of tumours). `treat` is coded 1/2; the book chapter does not state which code is the active treatment, so we do not label it (here `treat` 1/2 presumably corresponds to `rx` above, but this is not verified).
+
+```{r}
+head(bladder_first, 4)
+coxph(Surv(time, status) ~ factor(treat) + size, data = bladder_first) |>
+  broom::tidy(exponentiate = TRUE) |>
+  mutate(term = recode(term, `factor(treat)2` = "treat 2 vs treat 1", size = "size (per unit)"))
+```
+
+This is exactly the "wasteful" analysis: the recurrence-by-recurrence data above contain more events.
+
+## The WLW marginal model (briefly)
+
+For each event number $k$ fit a separate Cox model for "time to event $k$", **as if every subject were at risk for all $K$ events from time 0**:
+
+$$h_{ik}(t) = h_{0k}(t)\exp(\beta_k' x_i)$$
+
+- Each stratum uses total time from the origin; sandwich variance accounts for correlation across $k$
+- Gives event-specific effects $\beta_k$, optionally averaged into one common $\beta$
+- Needs a good number of events at every $k$
+- Criticism: subjects are "at risk" for event 3 before they have had event 2, which is hard to interpret
+- Today's focus is AG and PWP, WLW is shown for completeness
+
+## Choosing among the models
+
+| Research question | Suitable model |
+|---|---|
+| Does treatment reduce the **overall rate** of events? | AG (robust SE) |
+| Does treatment affect the **time to the $k$-th event, given that $k-1$ have occurred**? | PWP, stratified by event number |
+| Is the time **between** events (recovery period) affected? | PWP gap time |
+| Is the effect the same for the 1st, 2nd, 3rd event? | PWP/WLW with event-specific $\beta_k$ |
+| Events are not ordered (different types, e.g. both eyes)? | WLW marginal model |
+| Only the first event matters (e.g. death, stroke)? | Ordinary Cox |
+
+## Assumptions and pitfalls
+
+- AG: conditional independence given covariates, and no dependence on number of previous events. Violations bias SEs unless robust variance is used. Add covariates such as the *number of previous events* when plausible
+- PWP: conditional effects can suffer **selection bias**: patients reaching event 3 are a selected subgroup
+- Independent (non-informative) censoring, as always
+- Robust SEs rely on a reasonable number of subjects (clusters), not events
+- Do not just pick the model with the smallest p-value
+
+# Mean cumulative function
+
+## Mean cumulative function (MCF)
+
+The MCF is the expected number of events per subject up to time $t$:
+
+$$M(t) = E\{N(t)\}$$
+
+- Estimated by a Nelson-Aalen type estimator: $\hat M(t) = \sum_{t_j \le t} d_j / n_j$, where $n_j$ is the number of subjects at risk at $t_j$
+- Plot per treatment group: slope = event rate, and you can read "events by time $t$"
+- In R: `survfit()` with counting-process data and `id`
+
+## MCF in R: CGD
+
+```{r}
+#| fig-height: 4.3
+survfit2(Surv(tstart, tstop, status) ~ treat, id = id, data = cgd) |>
+  ggsurvfit(type = "cumhaz") +
+  add_confidence_interval() +
+  labs(x = "Days since randomisation", y = "Mean number of infections per patient")
+```
+
+Note: `id =` is needed so that a patient's several rows are one subject. Without it, rows would be counted as separate subjects.
+
+## MCF: interpretation
+
+```{r}
+mcf <- survfit(Surv(tstart, tstop, status) ~ treat, id = id, data = cgd)
+s <- summary(mcf, times = 300)
+```
+
+At 300 days the estimated mean number of infections per patient is `r round(s$cumhaz[1], 2)` in the placebo group and `r round(s$cumhaz[2], 2)` in the rIFN-g group (this is $\hat M(t)$, not a probability and can exceed 1).
+
+::: {.callout-note}
+Compare with the first-event KM curve: the MCF counts *all* infections, KM only the first. If patients are lost to death the MCF can be biased, see later.
+:::
+
+## MCF in R: rats and bladder
+
+```{r}
+#| layout-ncol: 2
+#| fig-height: 4.5
+survfit2(Surv(start, time, status) ~ treatment, id = rat, data = rats_cp) |>
+  ggsurvfit(type = "cumhaz") + add_confidence_interval() +
+  labs(x = "Days since randomisation", y = "Mean no. of tumours", title = "Rats")
+survfit2(Surv(start, stop, event) ~ trt, id = id, data = bladder2) |>
+  ggsurvfit(type = "cumhaz") + add_confidence_interval() +
+  labs(x = "Months", y = "Mean no. of recurrences", title = "Bladder cancer")
+```
+
+## Rats: AG model (Collett Example 13.2)
+
+```{r}
+fit_rat <- coxph(Surv(start, time, status) ~ treatment + cluster(rat), data = rats_cp)
+summary(fit_rat)$coefficients
+```
+
+```{r}
+#| include: false
+fit_rat_br <- coxph(Surv(start, time, status) ~ treatment + cluster(rat), data = rats_cp, ties = "breslow")
+```
+
+Rate ratio for retinoid vs control `r round(exp(coef(fit_rat)), 2)` (95% CI `r round(exp(confint(fit_rat)), 2) |> paste(collapse = " to ")`, robust SE `r round(sqrt(vcov(fit_rat)), 3)`). Collett reports 0.45 (0.30, 0.66) with robust SE 0.198.
+
+The supplied file has `r nrow(rats)` rows for `r n_distinct(rats$rat)` rats (`r sum(rats$treatment == "Retinoid" & !duplicated(rats$rat))` retinoid, `r sum(rats$treatment == "Control" & !duplicated(rats$rat))` control). We compared it with Table 13.2 of the book: all rats, times and censoring indicators agree, so the data are not the cause. The default `coxph` tie handling is Efron; with `ties = "breslow"` we get rate ratio `r round(exp(coef(fit_rat_br)), 2)` and robust SE `r round(sqrt(vcov(fit_rat_br)), 3)`, i.e. the book's robust SE (0.198) and a rate ratio near its 0.45. The book does not state its tie method (many ties here), so the remaining difference is unexplained. First-event-only HR: `r round(exp(coef(coxph(Surv(time, status) ~ treatment, data = filter(rats_cp, enum == 1)))), 2)` (Efron), Collett 0.50.
+
+# Terminal events and frailty
+
+## Death stops the recurrences
+
+Patients may die, and after death **no more events can occur**.
+
+- Death is a **competing risk** for further recurrences (lecture 13) and, in contrast to ordinary censoring, is *informative*: sick patients both recur more and die earlier
+- Treating death as censoring in AG/PWP/MCF answers a hypothetical question (rate "if nobody died") and can mislead
+- Practical options: report the **terminal event** separately with Cox, or analyse a composite (recurrence or death)
+- Joint models of recurrent and terminal events exist (joint frailty models), as does the `mstate` package. We only name them here
+
+::: {.callout-warning}
+A treatment that reduces hospitalisations because patients die sooner is not an improvement.
+:::
+
+## Frailty: pointer to Lecture 15
+
+An alternative to robust SEs is to add a subject-level random effect (frailty) $z_i$ with $E(z_i) = 1$ and $\text{Var}(z_i) = \theta$:
+
+$$h_i(t) = z_i\, h_0(t)\exp(\beta' x_i)$$
+
+This gives a conditional (subject-specific) interpretation, in contrast to the marginal AG/PWP approach of today. The theory, `frailty()` in R and the conditional vs marginal contrast are in **Lecture 15**.
+
+# Multi-state models and event history
+
+## Event history language
+
+A subject moves between **states**; an **event** is a **transition**; the hazard of each transition is the **transition intensity**.
+
+- Recurrent events: states "0 events", "1 event", "2 events", ... (PWP is a multi-state model)
+- Competing risks: one start state, several absorbing states
+- Illness-death: the classical example
+
+```{mermaid}
+flowchart LR
+  A[Healthy] -->|"h01(t)"| B[Illness]
+  A -->|"h02(t)"| C[Death]
+  B -->|"h12(t)"| C
+```
+
+Each arrow gets its own Cox model (`strata(transition)`), possibly with different covariate effects.
+
+## Small multi-state example: MGUS
+
+`mgus2`: patients with monoclonal gammopathy (MGUS) who may progress to plasma cell malignancy (PCM) and/or die. States: MGUS, PCM, death. Below we build only a simplified **single-time** version for the first transition (time `etime` and an event *factor* `ev`, plus `id`), not the full start-stop multi-state layout.
+
+```{r}
+mg <- mgus2 |> mutate(id = row_number(),
+                      ev = factor(ifelse(pstat == 1, 1, 2 * death), 0:2, c("censor", "PCM", "death")),
+                      etime = ifelse(pstat == 1, ptime, futime))
+mg |> select(id, age, sex, etime, ev) |> head(4)
+```
+
+## Aalen-Johansen estimate of state probabilities
+
+```{r}
+#| fig-height: 4.2
+survfit2(Surv(etime, ev) ~ 1, id = id, data = mg) |>
+  ggcuminc(outcome = c("PCM", "death")) +
+  labs(x = "Months since MGUS diagnosis", y = "Probability of being in state")
+```
+
+This is the first-transition view (competing risks, Lecture 13). A full illness-death analysis adds the transition PCM $\to$ death, uses start-stop data (`tmerge`) and one Cox model per transition. `mstate::` automates this; we only mention it.
+
+# Practice
+
+## In-class exercise
+
+Dataset `cgd`. Work in pairs, 10 minutes.
+
+1. Fit the AG model with `treat` and `sex`, with `cluster(id)`. Interpret the effect of `sex`.
+2. Fit PWP (total time) with `strata(enum4)`. Does the treatment effect change? Why can it differ from AG?
+3. For the question "does interferon reduce the *total number of infections* a patient has during one year?" which model do you recommend, and why?
+4. Make an MCF plot by `sex`. What does the plot tell you that a HR does not?
+
+## Quiz
+
+::: {.incremental}
+1. Why is the model-based SE too small when events are treated as independent?
+2. Which model has a common baseline hazard? Which stratifies by event number?
+3. A patient is at risk for the 3rd event: when does the PWP risk set start?
+4. What happens to the MCF if patients die early?
+:::
+
+## Take-home messages
+
+- Several events per subject: use **all** of them, but account for **correlation** (robust SE, `cluster(id)`)
+- Data layout: one row per at-risk interval, `Surv(start, stop, event)`, `id`, event number
+- **AG**: common baseline, overall rate; **PWP**: stratified by event number, conditional; **WLW**: marginal
+- Choose by the **research question**, not by the p-value
+- MCF = expected number of events per subject; use `survfit(..., id = id)`
+- Death is a **competing/terminal** event: not ordinary censoring
+- Multi-state models give a general language for transitions
+
+**Next lecture:** other topics: frailty (with the conditional vs marginal contrast), interval censoring, sample size.
+
+**Reading:** Collett, Chapter 13 (13.1 counting processes, 13.2 recurrent events: AG and PWP, 13.3 multiple events: WLW, 13.4 event history analysis). Seminar follows: bring your laptop.

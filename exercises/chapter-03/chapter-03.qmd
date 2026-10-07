@@ -1,0 +1,428 @@
+---
+title: "Chapter 3: The Cox regression model — Exercises"
+subtitle: "STA310 Survival Analysis (Master's in Applied Biostatistics)"
+lang: en
+solutions: false
+---
+
+Chapter 3 introduces the Cox proportional hazards model, the central modelling tool
+for relating survival experience to explanatory variables. These exercises cover the
+formulation of the model, its fitting via partial likelihood, inference for hazard
+ratios, model comparison and selection, and the interpretation and use of the fitted
+model. Model checking (residuals and the proportional hazards assumption) is taken
+up in Chapter 4.
+
+## The Cox regression model  (Book §3.1–3.2)
+
+### The hazard ratio
+
+*Type: Concept & notation*
+
+For two treatment groups, the proportional hazards model is $h_N(t) = \psi\, h_S(t)$,
+where $h_N(t)$ and $h_S(t)$ are the hazards for the new and standard treatments.
+
+(a) What does the quantity $\psi$ represent, and what does the value $\psi = 0.7$ mean
+    in words?
+(b) Why is $\psi$ re-expressed as $\exp(\beta)$? What is $\beta$ called, and what sign of
+    $\beta$ corresponds to the new treatment being inferior?
+(c) For $\beta = -0.3$, compute the hazard ratio and state which treatment is better.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $\psi$ is the hazard ratio: the ratio of the hazard of death at time $t$ for an
+    individual on the new treatment to that for an individual on the standard treatment,
+    assumed constant over time. $\psi = 0.7$ means the hazard of death at any time is 30%
+    lower on the new treatment, so the new treatment is better.
+(b) The hazard ratio cannot be negative, so it is convenient to write $\psi = \exp(\beta)$;
+    $\beta = \log\psi$ is the logarithm of the hazard ratio. $\beta$ can be any real value,
+    and a positive $\beta$ gives $\psi > 1$, i.e. the new treatment is inferior.
+(c) $\psi = \exp(-0.3) \approx 0.74$. Since the hazard ratio is below unity, the new
+    treatment is better (lower hazard).
+:::
+
+### The baseline hazard and the linear component
+
+*Type: Concept & notation*
+
+The general Cox model for the hazard of the $i$th individual is
+
+$$h_i(t) = \exp(\beta_1 x_{1i} + \beta_2 x_{2i} + \cdots + \beta_p x_{pi})\, h_0(t).$$
+
+(a) What is $h_0(t)$, and for whom is it the hazard?
+(b) Why does the linear component contain no intercept (constant) term $\beta_0$?
+(c) The quantity $\eta_i = \beta_1 x_{1i} + \cdots + \beta_p x_{pi}$ has two other names.
+    What are they, and how is $\eta_i$ used to compare two individuals?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $h_0(t)$ is the baseline hazard — the hazard for an individual for whom all the
+    explanatory variables equal zero. In a model containing only a treatment indicator,
+    it is the hazard in the reference group.
+(b) If a constant $\beta_0$ were included, the baseline hazard could simply be rescaled
+    (divided by $\exp(\beta_0)$) and the constant would cancel out, so $\beta_0$ is not
+    identifiable and is absorbed into $h_0(t)$.
+(c) The linear component is also called the *risk score* or *prognostic index*. The ratio
+    of hazards for two individuals $i$ and $k$ is $\exp(\eta_i - \eta_k)$, so the risk
+    score orders individuals by their hazard — a higher score means a higher hazard.
+:::
+
+### Fitting a factor
+
+*Type: From research question to model*
+
+A study of survival after kidney cancer (hypernephroma) records two factors: age group
+($< 60$, $60$–$70$, $> 70$) and whether a nephrectomy was performed (no / yes).
+
+(a) How many indicator (dummy) variables are needed to fit age group as a factor, and
+    why? How many degrees of freedom does the factor have?
+(b) Taking age group $< 60$ and "no nephrectomy" as the baseline levels, describe in
+    words the patient to whom the baseline hazard $h_0(t)$ corresponds.
+(c) Write the model for the hazard of a patient aged $> 70$ who had a nephrectomy, in
+    terms of the relevant coefficients.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) A factor with three levels needs two indicator variables (e.g. $A_2 = 1$ if $60$–$70$,
+    $A_3 = 1$ if $> 70$); the third level is the baseline. The factor has $3 - 1 = 2$
+    degrees of freedom. In general an $m$-level factor needs $m-1$ parameters.
+(b) The baseline hazard corresponds to a patient in the youngest age group ($< 60$) who
+    did not have a nephrectomy, since all indicator variables are then zero.
+(c) With coefficients $\alpha_2$ ($60$–$70$), $\alpha_3$ ($> 70$) and $\nu$
+    (nephrectomy), the hazard is $\exp(\alpha_3 + \nu)\, h_0(t)$.
+:::
+
+### Proportional hazards and the semi-parametric model
+
+*Type: Assumptions*
+
+*Builds on: Chapters 1–2*
+
+(a) In your own words, state the proportional hazards assumption underlying the Cox
+    model, and say what kind of behaviour it rules out.
+(b) The baseline hazard $h_0(t)$ is left completely unspecified — no distributional
+    assumption is made about it. Why is the Cox model therefore called semi-parametric?
+(c) Why does leaving $h_0(t)$ unspecified still allow the $\beta$-coefficients (and hence
+    the hazard ratios) to be estimated?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Proportional hazards means the effect of each covariate is a constant multiplicative
+    factor on the hazard at every time $t$: the hazard for an individual is
+    $\exp(\beta'x)$ times the baseline at all $t$. It rules out covariate effects that
+    change (or reverse) over time — e.g. a treatment that helps early but harms later.
+(b) The "parametric" part is the assumed exponential form of the covariate effects
+    (the $\beta$s), while the "non-parametric" part is the unspecified baseline hazard
+    $h_0(t)$. Hence semi-parametric.
+(c) In the partial likelihood, $h_0(t)$ cancels from numerator and denominator at each
+    event time, so the $\beta$s can be estimated using only the rank order of the
+    survival times, without estimating $h_0(t)$.
+:::
+
+## Fitting the model and making inferences  (Book §3.3–3.5)
+
+### The partial likelihood and the risk set
+
+*Type: Risk set reasoning*
+
+*Builds on: Chapter 2*
+
+Five patients are followed. Patients 2 and 5 are right-censored, and the three deaths,
+in order, are patients 3, 1 and 4 at times $t_{(1)} < t_{(2)} < t_{(3)}$. Patient 5 is
+censored before $t_{(2)}$, and patient 2 between $t_{(2)}$ and $t_{(3)}$. Write
+$\psi(i) = \exp(\beta'x_i)$.
+
+(a) List the risk set at each of the three death times.
+(b) Write the partial likelihood as a product over the three death times.
+(c) Censored patients contribute no term to the numerator of the partial likelihood.
+    Where does their information enter, and what does this imply about which feature of
+    the data drives the estimate of $\beta$?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $R(t_{(1)}) = \{1, 2, 3, 4, 5\}$ (all five); $R(t_{(2)}) = \{1, 2, 4\}$ (patient 3
+    has died, patient 5 censored); $R(t_{(3)}) = \{4\}$ (patient 1 has died, patient 2
+    censored).
+(b) $L(\beta) = \dfrac{\psi(3)}{\psi(1)+\psi(2)+\psi(3)+\psi(4)+\psi(5)}
+    \times \dfrac{\psi(1)}{\psi(1)+\psi(2)+\psi(4)} \times \dfrac{\psi(4)}{\psi(4)}$.
+(c) Censored individuals enter through the denominators (the risk sets) at death times
+    that occur before their censoring time. Because $L(\beta)$ depends only on the
+    ordering of the death times — which determines the risk sets — inference about
+    $\beta$ depends only on the rank order of the survival times, not their actual values.
+:::
+
+### Interpreting Cox regression output
+
+*Type: Interpret R output*
+
+For the breast cancer data (Example 1.2 in the book), a Cox model with staining indicator $X$
+($1$ = positive, $0$ = negative) gives $\hat\beta = 0.908$ with
+$\mathrm{se}(\hat\beta) = 0.501$.
+
+(a) Compute the estimated hazard ratio and interpret it in words.
+(b) Compute a 95% confidence interval for the log hazard ratio $\beta$, and hence for
+    the hazard ratio. Why is the interval obtained by exponentiating the $\beta$-limits
+    preferable to $\hat\psi \pm 1.96\, \mathrm{se}(\hat\psi)$?
+(c) The null model has $-2\log\hat L = 173.968$ and the model with $X$ has $170.096$.
+    Carry out the likelihood-ratio test and interpret. (The corresponding log-rank test
+    gave $\chi^2 = 3.515$, $P = 0.061$.)
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $\hat\psi = \exp(0.908) = 2.48$. The hazard of death at any time for a woman with a
+    positively stained tumour is about 2.5 times that for a negatively stained woman;
+    positive staining indicates a poorer prognosis.
+(b) A 95% CI for $\beta$ is $0.908 \pm 1.96 \times 0.501 = (-0.074,\, 1.890)$.
+    Exponentiating gives $(0.93,\, 6.62)$ for the hazard ratio. The log hazard ratio is
+    closer to normally distributed than the hazard ratio itself, so exponentiating the
+    $\beta$-limits gives a better-behaved interval.
+(c) The difference is $173.968 - 170.096 = 3.872$ on 1 degree of freedom, giving
+    $P = 0.049$. There is evidence, just significant at the 5% level, of a difference in
+    hazard between the staining groups — essentially the same conclusion as the log-rank
+    test ($P = 0.061$); the small difference in p-values is immaterial.
+:::
+
+### Interpreting a multi-variable model
+
+*Type: Interpret R output*
+
+For the multiple myeloma data (Example 1.3 in the book), a Cox model is fitted with all seven
+explanatory variables. Of the individual 95% confidence intervals, only those for Bun
+($\hat\beta = 0.021$, $\mathrm{se} = 0.006$) and Hb ($\hat\beta = -0.135$,
+$\mathrm{se} = 0.069$) exclude zero. When Bun is omitted, the estimated coefficient of
+Hb changes from $-0.135$ to $-0.140$, and the other coefficients change too.
+
+(a) Why can we *not* conclude from these individual results alone that only Bun and Hb
+    are needed in the model?
+(b) What does the change in the estimated coefficients when Bun is omitted tell us about
+    the estimates?
+(c) In a model with several variables, what does it mean to say that a coefficient is
+    "adjusted for" the others?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Each individual Wald test tests $\beta_j = 0$ *in the presence of all the other
+    variables*, and the estimates are correlated with one another. A variable's
+    coefficient can change when another is removed, so the relevant subset cannot be
+    identified from a single full model.
+(b) It shows the estimates depend on which other variables are in the model (the
+    variables are correlated), so each term's effect must be studied by comparing
+    models, not by inspecting one full fit in isolation.
+(c) "Adjusted for" the other variables means the estimated effect of a variable holds
+    the other variables in the model fixed — it is the effect on the hazard controlling
+    for the others.
+:::
+
+### Comparing nested models
+
+*Type: Model comparison*
+
+For the hypernephroma data (Example 3.4), the values of $-2\log\hat L$ for five nested
+models are summarised below. Age group is fitted via $A_2, A_3$ and nephrectomy via $N$;
+the interaction uses the products $A_2 N, A_3 N$.
+
+| Terms in model | Variables | $-2\log\hat L$ |
+|---|---|---|
+| none | — | 177.667 |
+| age group | $A_2, A_3$ | 172.172 |
+| nephrectomy | $N$ | 170.247 |
+| age group + nephrectomy | $A_2, A_3, N$ | 165.508 |
+| + interaction | $A_2, A_3, N, A_2 N, A_3 N$ | 162.479 |
+
+(a) Test for an interaction between age group and nephrectomy. What do you conclude?
+(b) Does age group add to a model that already contains nephrectomy? Does nephrectomy
+    add to a model that already contains age group?
+(c) Which model would you select, and why? What role do the degrees of freedom play in
+    these comparisons?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The interaction reduces $-2\log\hat L$ by $165.508 - 162.479 = 3.029$ on 2 d.f.,
+    $P = 0.220$, which is not significant. There is no evidence of an interaction: the
+    effect of nephrectomy does not depend on age group.
+(b) Age group added to nephrectomy: $170.247 - 165.508 = 4.739$ on 2 d.f.
+    ($P = 0.094$), some evidence. Nephrectomy added to age group:
+    $172.172 - 165.508 = 6.664$ on 1 d.f. ($P = 0.010$), significant. So nephrectomy is
+    clearly needed, and age group adds something in the presence of nephrectomy.
+(c) Select the model with both main effects and no interaction: the hazard depends on
+    both age group and nephrectomy. The degrees of freedom are the difference in the
+    number of parameters between the two nested models, which is the degrees of freedom
+    of the chi-squared distribution of the difference in $-2\log\hat L$.
+:::
+
+## Model selection  (Book §3.6–3.8)
+
+### A strategy for model selection
+
+*Type: Method selection*
+
+(a) State the hierarchic principle, and give an example of a situation where it applies.
+(b) Why does the book recommend against relying uncritically on automatic forward
+    selection, backward elimination or stepwise procedures?
+(c) Describe the first step of the recommended model-selection strategy, and explain why
+    a relatively large significance level (about 15%) is suggested for guiding inclusion.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The hierarchic principle: a higher-order term (e.g. an interaction) should be
+    included only when the corresponding lower-order (main effect) terms are present;
+    otherwise the model is difficult to interpret. For example, an interaction between
+    age group and nephrectomy is only interpretable when both main effects are fitted.
+(b) Automatic routines typically return a single "best" subset rather than a set of
+    equally good models; the result depends on the direction (forward, backward,
+    stepwise) and on the stopping rule; and they generally ignore the hierarchic
+    principle.
+(c) Step 1 fits each variable alone and compares its $-2\log\hat L$ with that of the
+    null model, to find which variables on their own significantly reduce the statistic.
+    A generous level (about 15%) avoids excluding potentially relevant variables too
+    early, since a variable unimportant on its own may become important in the presence
+    of others.
+:::
+
+### Variable selection with the lasso
+
+*Type: Method selection*
+
+(a) What does the lasso do to the estimated coefficients, and how does it carry out
+    variable selection?
+(b) Why must the explanatory variables be standardised before the lasso is applied?
+(c) How is the optimal value of the tuning parameter $\lambda$ chosen, and why are
+    standard errors and hazard ratios usually not reported after using the lasso?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The lasso shrinks the coefficients towards zero by penalising the sum of their
+    absolute values (the $L_1$-norm); some are set exactly to zero, so the corresponding
+    variables are excluded. The variables selected are those with non-zero coefficients.
+(b) The penalty $\lambda\sum_j|\beta_j|$ treats all coefficients on the same footing, so
+    the variables must be on comparable scales; otherwise the penalty falls unequally on
+    variables with large versus small measurement scales.
+(c) $\lambda$ is chosen by, for example, cross-validation — maximising the
+    cross-validated partial log-likelihood. Standard errors are usually not reported
+    because the lasso estimates are biased towards zero, so their standard errors are
+    not meaningful and would understate the precision of the estimates.
+:::
+
+## Interpreting and using the fitted model  (Book §3.9–3.11)
+
+### Adjusted and unadjusted hazard ratios
+
+*Type: What's wrong here?*
+
+For the prostatic cancer data (Example 1.4), a model containing only the treatment
+indicator gives a coefficient of $-1.978$ (hazard ratio $0.14$). After adjusting for
+tumour size and Gleason index, the coefficient is $-1.113$ (hazard ratio $0.329$).
+
+(a) Explain in words what the two hazard ratios estimate, and why they differ.
+(b) A researcher reports "treatment reduces the hazard of death by 86%", based on the
+    unadjusted model. What is wrong with this statement?
+(c) Which hazard ratio is the better summary of the treatment effect, and why?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The unadjusted hazard ratio ($0.14$) compares the treatment groups ignoring tumour
+    size and Gleason index; the adjusted hazard ratio ($0.329$) compares two individuals
+    on different treatments who have the same size and index. They differ because the
+    prognostic variables are not equally distributed across the treatment groups, so the
+    unadjusted comparison conflates the treatment effect with those differences.
+(b) "86% reduction" overstates the effect: it is based on the unadjusted value, which is
+    confounded by tumour size and grade. Properly adjusted, the reduction is about 67%
+    (hazard ratio $0.33$) — still substantial, but less extreme.
+(c) The adjusted hazard ratio, because it isolates the treatment effect from the effects
+    of size and index. The aim is to estimate the effect of treatment, not the combined
+    effect of treatment plus any imbalance in prognostic factors.
+:::
+
+### Estimating the survivor function
+
+*Type: Concept & notation*
+
+*Builds on: Chapter 2*
+
+After fitting a Cox model, the estimated survivor function for an individual is
+
+$$\hat S_i(t) = \big\{\hat S_0(t)\big\}^{\exp(\hat\beta'x_i)}.$$
+
+(a) What is $\hat S_0(t)$, and how is $\hat S_i(t)$ obtained from it?
+(b) With no covariates in the model, show that this formula reduces to the Kaplan–Meier
+    estimate.
+(c) In the hypernephroma example, nephrectomy has coefficient $-1.412$. If the baseline
+    survivor function at 12 months is $\hat S_0(12) = 0.486$, estimate the 12-month
+    survival probability for a patient aged $< 60$ who had a nephrectomy, and explain
+    why the two estimated curves cannot cross.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $\hat S_0(t)$ is the estimated baseline survivor function (for an individual with
+    all covariates equal to zero). $\hat S_i(t)$ raises it to the power
+    $\exp(\hat\beta'x_i)$, the individual's estimated hazard ratio relative to baseline.
+(b) With no covariates, $\exp(\hat\beta'x_i) = 1$ and $\hat S_i(t) = \hat S_0(t)$, which
+    equals the Kaplan–Meier estimate $\prod (n_j - d_j)/n_j$. So the Cox-based estimate
+    generalises the Kaplan–Meier estimate to the case with covariates.
+(c) $\hat S(12) = 0.486^{\exp(-1.412)} = 0.486^{0.244} \approx 0.84$. Because of
+    proportional hazards the two survivor functions are powers of one another, so one is
+    always above the other and they never cross; the nephrectomy curve lies above
+    (nephrectomy improves prognosis).
+:::
+
+## Mini-lab: fitting a Cox model in R
+
+### Fitting a Cox model in R
+
+*Type: Mini-lab*
+
+Run the code below. It simulates 200 patients with a treatment indicator (`treat`) and
+age, generates survival times with a proportional-hazards structure, censors them, and
+fits a Cox model.
+
+```{r}
+#| echo: true
+set.seed(2718)
+n <- 200
+treat <- rep(c(0, 1), each = n / 2)
+age <- round(runif(n, 45, 80))
+eta <- 0.55 * treat + 0.04 * (age - 60)
+t <- rexp(n, rate = 0.08 * exp(eta))
+cens <- runif(n, 0, 60)
+obs <- pmin(t, cens)
+status <- as.numeric(t <= cens)
+d <- data.frame(time = obs, status = status, treat = treat, age = age)
+
+library(survival)
+fit <- coxph(Surv(time, status) ~ treat + age, data = d)
+summary(fit)
+```
+
+(a) From the summary, report the estimated hazard ratio and its 95% confidence interval
+    for treatment, and interpret.
+(b) Report the hazard ratio per additional year of age, and interpret.
+(c) How many events are there? What does the "Concordance" line measure, and is the
+    model useful for discrimination?
+(d) What are the three tests at the bottom of the output, and do they agree?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The hazard ratio for `treat` is $1.90$ (95% CI $1.38$ to $2.61$). The hazard of the
+    event at any time is about 1.9 times as high for treated versus untreated patients,
+    adjusted for age ($P < 0.001$).
+(b) The hazard ratio per additional year of age is $1.038$ (95% CI $1.022$ to $1.054$);
+    each extra year increases the hazard by about 3.8%.
+(c) There are 172 events. Concordance (the $c$-statistic) is $0.60$, which is modest:
+    the model separates higher- from lower-risk individuals only weakly (0.5 means no
+    discrimination; values above about 0.7 are generally considered reasonable).
+(d) The likelihood ratio, Wald and score (log-rank) tests all test the joint hypothesis
+    that both coefficients are zero. They all give $P < 0.0001$, strongly rejecting the
+    null — the three tests agree.
+:::

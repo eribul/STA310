@@ -1,0 +1,497 @@
+---
+title: "Chapter 2: Some non-parametric procedures — Exercises"
+subtitle: "STA310 Survival Analysis (Master's in Applied Biostatistics)"
+lang: en
+solutions: false
+---
+
+Chapter 2 covers non-parametric (distribution-free) methods for summarising survival
+data: estimating the survivor, hazard and cumulative hazard functions, estimating the
+median and other percentiles, and comparing two or more groups with the log-rank,
+Wilcoxon and Peto–Peto tests. These exercises emphasise interpretation and application
+rather than the underlying derivations.
+
+## Estimating the survivor function  (Book §2.1–2.2)
+
+### The Kaplan–Meier curve
+
+*Type: Interpret figure*
+
+*Builds on: Chapter 1*
+
+The figure shows a Kaplan–Meier estimate of the survivor function for a single sample
+with some censored observations. The estimate is a step function, and a number of
+time points are marked with small tick marks.
+
+```{r}
+#| echo: false
+library(survival)
+set.seed(3)
+t <- rexp(20, rate = 0.1)
+c <- runif(20, 0, 12)
+plot(
+  survfit(Surv(pmin(t, c), as.numeric(t <= c)) ~ 1),
+  xlab = "Time",
+  ylab = "S(t)",
+  mark.time = TRUE
+)
+```
+
+(a) Why does the estimate drop only at observed event times, and not at the censored
+    times?
+(b) What information do the tick marks convey?
+(c) The largest observation is censored. What does this imply about the estimate beyond
+    that time?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The Kaplan–Meier estimate is a product of survival probabilities
+    $(n_j - d_j)/n_j$ at each event time. Between events no one dies, so the estimate
+    is constant; censored times contribute information (they reduce the risk set) but
+    do not themselves cause a drop.
+(b) The tick marks show where an individual was censored — left the risk set without
+    an observed event.
+(c) The estimate is undefined beyond the largest (censored) time: it never reaches 0,
+    because no event was observed after that point.
+:::
+
+### Computing a Kaplan–Meier estimate
+
+*Type: Concept & notation*
+
+Six patients are followed; their times (months) to an event, with censored times marked
+with "+", are:
+
+$$3,\; 4+,\; 5,\; 5,\; 7,\; 10+$$
+
+(a) List the distinct event times and the number at risk just before each one.
+(b) Compute the Kaplan–Meier estimate of $S(t)$ at each event time.
+(c) What is the value of the estimate beyond 10 months?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Event times 3, 5 and 7. At risk just before $t=3$: 6; before $t=5$: 4 (one death
+    at 3, and the $4+$ patient censored); before $t=7$: 2.
+(b) $\hat S(3) = 5/6 \approx 0.833$; $\hat S(5) = 0.833 \times (2/4) = 0.417$;
+    $\hat S(7) = 0.417 \times (1/2) = 0.208$.
+(c) The largest observation (10) is censored, so $\hat S(t)$ is undefined beyond 10 and
+    never reaches 0.
+:::
+
+### Life table, Kaplan–Meier and Nelson–Aalen
+
+*Type: Method selection*
+
+(a) When is the life-table (actuarial) estimate of the survivor function the appropriate
+    choice, and when would you prefer the Kaplan–Meier estimate?
+(b) How do the Kaplan–Meier and Nelson–Aalen estimates relate to each other — which is
+    the larger, and when are they very similar?
+(c) Why does the life-table estimate lose information when individual event times are
+    actually known?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The life table is suited to grouped data, where only the numbers of deaths and
+    censored observations in each interval are known (e.g. interval-censored data).
+    When the individual event times are known, the Kaplan–Meier estimate is preferred.
+(b) The Nelson–Aalen estimate is always at least as large as the Kaplan–Meier estimate
+    (because $e^{-x} \ge 1-x$); the two are very similar except at the longest survival
+    times, where the risk set is small.
+(c) Grouping the times discards the exact event times, so the estimate is coarser (less
+    precise) than one based on the individual times.
+:::
+
+### The precision of the estimate
+
+*Type: Concept & notation*
+
+From a Kaplan–Meier analysis, $\hat S(12\ \text{months}) = 0.65$ with a 95% confidence
+interval $(0.52, 0.78)$.
+
+(a) Interpret this confidence interval in words.
+(b) Explain why the standard error of $\hat S(t)$ — and hence the width of the
+    confidence interval — generally increases as $t$ increases.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) We are 95% confident that the true probability of surviving beyond 12 months lies
+    between 0.52 and 0.78. (It is a pointwise interval, valid at this single time.)
+(b) At later times the estimate is based on fewer individuals (the risk set shrinks as
+    people die or are censored), so there is more uncertainty. Greenwood's formula sums
+    terms $d_j/[n_j(n_j-d_j)]$ that grow as $n_j$ falls, so the standard error increases
+    with time.
+:::
+
+## Estimating the hazard and the median  (Book §2.3–2.5)
+
+### Estimating the cumulative hazard
+
+*Type: Concept & notation*
+
+*Builds on: Chapter 1*
+
+From Chapter 1, the cumulative hazard is $H(t) = -\log S(t)$.
+
+(a) Given a Kaplan–Meier estimate $\hat S(t)$, how would you estimate the cumulative
+    hazard $\hat H(t)$?
+(b) The Nelson–Aalen estimate of $H(t)$ is the sum $\sum_j d_j/n_j$ over the event
+    times up to $t$. Explain in words what this sum accumulates.
+(c) If a plot of the estimated cumulative hazard is roughly a straight line, what does
+    this suggest about the hazard function?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $H(t) = -\log S(t)$ is a relationship between two *population* quantities — the
+    true cumulative hazard and the true survivor function. To estimate the cumulative
+    hazard, the same relationship is applied to the *estimated* survivor function:
+    $\hat H(t) = -\log \hat S(t)$. In other words, $H(t)$ and $S(t)$ are the unknown
+    population values, whereas $\hat H(t)$ and $\hat S(t)$ are their sample-based
+    estimates (here, $\hat S(t)$ is the Kaplan–Meier estimate).
+(b) It adds up the estimated probability of death $d_j/n_j$ at each event time — the
+    expected number of events accumulated up to time $t$ (the cumulative risk).
+(c) The slope of the cumulative hazard is the hazard, so a straight line means the
+    hazard is roughly constant over that period.
+:::
+
+### Estimating the median survival time
+
+*Type: Concept & notation*
+
+A Kaplan–Meier estimate gives the following values of the survivor function:
+
+| $t$ | 10 | 20 | 30 | 40 |
+|---|---|---|---|---|
+| $\hat S(t)$ | 0.72 | 0.55 | 0.41 | 0.30 |
+
+(a) What is the estimated median survival time, and how is it read off the estimate?
+(b) In a different study, the estimate never falls below 0.5 during the whole period of
+    follow-up. What does this mean for estimating the median, and what could you report
+    instead?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The median is the smallest time at which $\hat S(t) < 0.5$: here $\hat S(30)=0.41
+    < 0.5$ (and $\hat S(20)=0.55 > 0.5$), so the estimated median is 30.
+(b) The median cannot be estimated, because survival never drops to 0.5 within the
+    observed range. Report other percentiles, or the estimated survival probabilities at
+    fixed time points instead.
+:::
+
+### Computing a Nelson–Aalen estimate
+
+*Type: Concept & notation*
+
+*Builds on: Chapter 1*
+
+Seven patients are followed until an event (in months), with a censored time marked "+":
+
+$$3,\; 5,\; 5,\; 8+,\; 10,\; 12,\; 15$$
+
+(a) List the distinct event times and the number at risk just before each one.
+(b) Compute the Nelson–Aalen estimate of the cumulative hazard, $\hat H(t)$, at each
+    event time.
+(c) Compute the Kaplan–Meier estimate $\hat S(t)$ at the same event times, and compare
+    it with $\exp\{-\hat H(t)\}$. Which is the larger?
+(d) What is the estimated median survival time?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Event times 3, 5, 10, 12 and 15. At risk just before each: 7, 6, 3, 2 and 1
+    (the $8+$ patient leaves the risk set between the two events at 5 and the event
+    at 10).
+
+(b) The Nelson–Aalen estimate accumulates $d_j/n_j$:
+    $\hat H(3) = 1/7 = 0.143$;
+    $\hat H(5) = 0.143 + 2/6 = 0.476$;
+    $\hat H(10) = 0.476 + 1/3 = 0.810$;
+    $\hat H(12) = 0.810 + 1/2 = 1.310$;
+    $\hat H(15) = 1.310 + 1/1 = 2.310$.
+
+(c) Kaplan–Meier: $\hat S(3) = 6/7 = 0.857$; $\hat S(5) = 0.857 \times 4/6 = 0.571$;
+    $\hat S(10) = 0.571 \times 2/3 = 0.381$; $\hat S(12) = 0.381 \times 1/2 = 0.190$;
+    $\hat S(15) = 0$. 
+    The corresponding $\exp\{-\hat H(t)\}$ from the Nelson-Aalen estimates are 0.867, 0.621,
+    0.445, 0.270 and 0.099 — each is at least as large as the Kaplan–Meier estimate
+    (because $e^{-x} \ge 1 - x$), so the Nelson–Aalen-based survivor estimate never
+    lies below the Kaplan–Meier estimate.
+
+(d) The median is the smallest time with $\hat S(t) < 0.5$: $\hat S(5) = 0.571 > 0.5$
+    and $\hat S(10) = 0.381 < 0.5$, so the estimated median is 10 months.
+:::
+
+## Comparing two or more groups  (Book §2.6–2.9)
+
+### Choosing a test for two groups
+
+*Type: Method selection*
+
+You want to compare the survival experience of two treatment groups. Which of the
+log-rank, Wilcoxon and Peto–Peto tests would you use in each situation, and why?
+
+(a) The two estimated survivor functions do not cross, and proportional hazards seems
+    reasonable.
+(b) You are mainly interested in differences in survival early on, when most events
+    occur.
+(c) The pattern of censoring differs between the two groups.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The log-rank test — it is the most powerful under proportional hazards.
+(b) The Wilcoxon test — it weights each difference by the risk-set size $n_j$, so it
+    down-weights the tail and is more sensitive to early differences.
+(c) The Peto–Peto test — it performs better than the Wilcoxon test when the censoring
+    pattern differs between groups.
+:::
+
+### The log-rank test and proportional hazards
+
+*Type: Assumptions*
+
+*Builds on: Chapter 1*
+
+(a) In your own words, what does *proportional hazards* mean?
+(b) Why is "the two estimated survivor functions do not cross" only a necessary, not a
+    sufficient, check for proportional hazards?
+(c) Using $S(t) = \exp\{-H(t)\}$ from Chapter 1, explain why proportional hazards
+    implies that the two survivor functions never cross.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The hazard in one group is a constant multiple of the hazard in the other group at
+    every time $t$: $h_1(t) = \psi\, h_2(t)$.
+(b) Sample-based estimates can cross by chance even when the true hazards are
+    proportional, and non-crossing curves do not guarantee proportional hazards. It is
+    only a rough, informal check.
+(c) If $h_1 = \psi h_2$ then $H_1 = \psi H_2$, so
+    $S_1(t) = \exp(-H_1) = \exp(-\psi H_2) = \{S_2(t)\}^{\psi}$, which is either always
+    above or always below $S_2(t)$; hence the curves never cross.
+:::
+
+### Interpreting a log-rank test
+
+*Type: Interpret R output*
+
+The output below compares the survival times of women with breast cancer, grouped
+according to whether a section of the tumour was positively or negatively stained.
+
+```
+survdiff(Surv(time, status) ~ stain)
+
+                    N Observed Expected (O-E)^2/E (O-E)^2/V
+stain=positive     13        5     9.57      2.18      3.52
+stain=negative     32       20    15.43      1.35      3.52
+
+ Chisq= 3.5  on 1 degrees of freedom, p= 0.06
+```
+
+(a) State the null hypothesis being tested.
+(b) For the positively stained group, interpret the observed (5) and expected (9.57)
+    numbers of deaths.
+(c) What are the value of the test statistic, its degrees of freedom and the p-value?
+    What do you conclude?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) No difference in the survival experience (the survivor functions) of the two
+    staining groups.
+(b) Five deaths were observed, whereas 9.57 would be expected if the two groups had the
+    same survival experience (the expected count is built up from the risk sets). Fewer
+    deaths than expected suggests better survival in the positive group.
+(c) $\chi^2 = 3.5$ on 1 degree of freedom, $p = 0.06$. This is slight evidence against
+    the null hypothesis (between 0.05 and 0.1), not significant at the conventional 5%
+    level — so at most weak evidence of a difference in prognosis.
+:::
+
+### Computing the log-rank statistic
+
+*Type: Risk set reasoning*
+
+Two groups of patients are followed until an event (in months); there is no
+censoring:
+
+Group A: $5,\; 9,\; 13,\; 17$
+Group B: $2,\; 4,\; 7,\; 11$
+
+(a) List the ordered event times, and for each give the numbers at risk in groups
+    A and B.
+(b) For group A, compute the observed number of deaths $O_A$ and the expected number
+    $E_A = n_A d/(n_A + n_B)$ at each event time, and hence the totals $O_A$ and
+    $E_A$.
+(c) The log-rank statistic is $(O_A - E_A)^2/V$, where
+
+$$V = \sum_j \frac{n_{Aj} n_{Bj} d_j (n_j - d_j)}{n_j^2 (n_j - 1)}.$$
+
+    Compute the statistic and compare it with the $\chi^2$ distribution on one degree
+    of freedom.
+(d) Interpret the result.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Event times 2, 4, 5, 7, 9, 11, 13 and 17. At risk $(n_A, n_B)$: at 2: $(4,4)$;
+    at 4: $(4,3)$; at 5: $(4,2)$; at 7: $(3,2)$; at 9: $(3,1)$; at 11: $(2,1)$; at
+    13: $(2,0)$; at 17: $(1,0)$.
+
+(b) With one death at each time, $E_A = n_A/(n_A + n_B)$. For group A the observed
+    and expected deaths are:
+
+    | $t$ | 2 | 4 | 5 | 7 | 9 | 11 | 13 | 17 |
+    |---|---|---|---|---|---|---|---|---|
+    | $O_A$ | 0 | 0 | 1 | 0 | 1 | 0 | 1 | 1 |
+    | $E_A$ | 0.500 | 0.571 | 0.667 | 0.600 | 0.750 | 0.667 | 1.000 | 1.000 |
+
+    So $O_A = 4$ and $E_A = 5.755$.
+
+(c) The variance contributions are $0.250, 0.245, 0.222, 0.240, 0.188, 0.222$ and $0$
+    at the last two times, giving $V = 1.367$. The statistic is
+    $(4 - 5.755)^2/1.367 = 3.08/1.367 = 2.25$ on 1 degree of freedom, giving
+    $p \approx 0.13$.
+
+(d) Group A died less than expected under the null (4 observed vs 5.76 expected),
+    so group A appears to have somewhat better survival, but the difference is not
+    statistically significant ($\chi^2 = 2.25$, $p \approx 0.13$) — unsurprising with
+    only four patients per group.
+:::
+
+### Stratifying a comparison
+
+*Type: From research question to model*
+
+A multicentre trial compares two chemotherapy treatments for lung cancer. Survival times
+are available from several centres, and age is also recorded.
+
+(a) Why might you stratify the comparison by centre rather than simply ignore centre?
+(b) What does a stratified log-rank test provide that separate (per-centre) tests do
+    not?
+(c) In words, what is the null hypothesis of the stratified test?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Survival may differ systematically between centres (or age groups); ignoring these
+    variables could confound the treatment comparison. Stratifying accounts for them.
+(b) It combines the information across strata into a single overall test of the
+    treatment effect, giving a more precise summary than a set of separate tests.
+(c) No treatment difference, after allowing for the stratifying variable (centre or
+    age group).
+:::
+
+### A misleading comparison
+
+*Type: What's wrong here?*
+
+A researcher compares two treatment groups by computing, for each group, the proportion
+of patients still alive at the end of the study, and then compares these two proportions
+with a chi-squared test. Patients entered the study at different times and were followed
+for different lengths of time.
+
+Explain what is wrong with this approach.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.** The approach ignores censoring and the actual survival times: patients
+followed for different durations are treated as if they all had the same follow-up, so
+the information in the survival times (and in the censored observations) is thrown
+away. A group followed for a shorter time would misleadingly appear to have worse
+survival. The comparison should use the full survival times and handle censoring, as the
+log-rank test does.
+:::
+
+## Mini-lab: Kaplan–Meier and the log-rank test in R
+
+### Comparing two groups in R
+
+*Type: Mini-lab*
+
+Run the code below. It simulates two groups of 25 patients (Group A with a lower hazard
+than Group B) with independent censoring, fits Kaplan–Meier curves, and runs a log-rank
+test.
+
+```{r}
+#| echo: true
+set.seed(7)
+n <- 25
+time <- c(rexp(n, 0.05), rexp(n, 0.10)) # Group A then Group B
+cens <- runif(2 * n, 0, 40)
+obs <- pmin(time, cens)
+event <- as.numeric(time <= cens)
+grp <- factor(rep(c("A", "B"), each = n))
+d <- data.frame(time = obs, status = event, group = grp)
+
+library(survival)
+library(ggsurvfit)
+
+survfit2(Surv(time, status) ~ group, data = d) |>
+  ggsurvfit() +
+  labs(x = "Time", y = "Survival probability")
+
+survdiff(Surv(time, status) ~ group, data = d)
+```
+
+(a) From the plot, which group appears to have better survival? Estimate each group's
+    median survival time.
+(b) What is the value of the log-rank test statistic, its degrees of freedom and its
+    p-value? State the null hypothesis and your conclusion.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Group A lies above Group B, so A has better survival; the printed medians are about
+    15 for A and about 9 for B.
+(b) $\chi^2 = 7.5$ on 1 degree of freedom, $p = 0.006$. The null hypothesis is no
+    difference in survival between the groups. There is strong evidence against it
+    ($p < 0.01$), so we conclude the two groups differ in their survival experience.
+:::
+
+### Analysing a real dataset: acute myeloid leukaemia
+
+*Type: Mini-lab*
+
+The `aml` dataset (in the `survival` package) contains survival times for 23 patients
+with acute myeloid leukaemia, grouped by whether they received maintenance
+chemotherapy (`x`: "Maintained" or "Nonmaintained"). Run the code below to plot the
+Kaplan–Meier curves and run a log-rank test.
+
+```{r}
+#| echo: true
+library(survival)
+library(ggsurvfit)
+data(aml)
+
+survfit2(Surv(time, status) ~ x, data = aml) |>
+  ggsurvfit() +
+  labs(x = "Time (weeks)", y = "Survival probability")
+
+survdiff(Surv(time, status) ~ x, data = aml)
+```
+
+(a) How many patients are in each group, and how many events (deaths) occurred in
+    each?
+(b) From the plot, which group appears to have better survival? Report each group's
+    estimated median survival time.
+(c) Report the log-rank statistic, its degrees of freedom and p-value. State the null
+    hypothesis and your conclusion.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) 11 patients were "Maintained" (with 7 deaths) and 12 were "Nonmaintained" (with
+    11 deaths).
+(b) The Maintained group lies above the Nonmaintained group, so it has better
+    survival; the estimated median survival times are about 31 weeks (Maintained) and
+    23 weeks (Nonmaintained).
+(c) $\chi^2 = 3.4$ on 1 degree of freedom, $p = 0.07$. The null hypothesis is no
+    difference in survival between the two groups. The Maintained group died less than
+    expected (7 observed vs 10.7 expected), but the evidence is only modest
+    ($p \approx 0.07$, not significant at the 5% level): there is at most weak
+    evidence that maintenance chemotherapy improves survival in these patients.
+:::

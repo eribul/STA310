@@ -1,0 +1,7 @@
+---
+title: "Chapter 6: Flexible parametric models — Exercises"
+subtitle: "STA310 Survival Analysis (Master's in Applied Biostatistics)"
+lang: en
+---
+
+<!-- Exercises for this chapter are authored here. Start from ../../_template.qmd. -->

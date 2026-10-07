@@ -1,0 +1,454 @@
+---
+title: "Lecture 2: Non-parametric Estimation of Survival"
+subtitle: "STA310 Survival Analysis · Collett Chapter 2 (part 1)"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+iud <- read.table(
+  file.path(data_dir, "Time to discontinuation of the use of an IUD.dat"),
+  header = TRUE
+)
+breast <- read.table(
+  file.path(data_dir, "Prognosis for women with breast cancer.dat"),
+  header = TRUE
+)
+breast$stain <- factor(
+  breast$stain,
+  levels = 1:2,
+  labels = c("Negative", "Positive")
+)
+myeloma <- read.table(
+  file.path(data_dir, "Survival of multiple myeloma patients.dat"),
+  header = TRUE
+)
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. Recap
+2. The Kaplan–Meier estimator, by hand and in R
+3. Plotting: censoring marks and risk tables
+4. Uncertainty: Greenwood and confidence intervals
+5. Median, percentiles and restricted mean
+6. Nelson–Aalen estimator of $H(t)$
+7. Reporting follow-up
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+You can
+
+- compute a Kaplan–Meier estimate by hand for a small data set
+- estimate, plot and interpret survival curves in R
+- choose and report median survival with a confidence interval
+- estimate the cumulative hazard
+:::
+:::
+
+## Recap
+
+- Data: $(t_i, \delta_i)$, time and event indicator ($\delta_i = 1$ event, $0$ censored)
+- $S(t) = P(T > t)$, $h(t)$ = instantaneous rate, $H(t) = -\log S(t)$
+- Right censoring must be independent of the event process
+
+**Today's question**: how do we estimate $S(t)$ **without assuming a distribution**, when some observations are censored?
+
+# Kaplan–Meier
+
+## Why not just "proportion still alive"?
+
+At time $t$, the simple proportion $\frac{\#\{t_i > t\}}{n}$ treats censored patients as if they had the event.
+
+. . .
+
+Instead, build $S(t)$ from conditional probabilities:
+
+> To survive past $t_3$ you must survive past $t_1$, then past $t_2$ given you survived $t_1$, and so on.
+
+$$S(t) = \prod_{j:\, t_j \le t} P(\text{survive } t_j \mid \text{alive just before } t_j)$$
+
+Each factor is estimated using only those **still at risk** at $t_j$.
+
+## The Kaplan–Meier (product-limit) estimator
+
+Let $t_{(1)} < \dots < t_{(r)}$ be the distinct **event** times, and
+
+- $d_j$ = number of events at $t_{(j)}$
+- $n_j$ = number **at risk** just before $t_{(j)}$ (event or censored at time $\ge t_{(j)}$)
+
+$$\hat S(t) = \prod_{j:\, t_{(j)} \le t} \left(1 - \frac{d_j}{n_j}\right)$$
+
+- Step function, constant between event times, drops only at **events**
+- Censored observations affect the estimate only by leaving the risk set
+- With no censoring: equals the usual empirical survival proportion
+
+## Worked example: the IUD data
+
+18 women, time in weeks to discontinuation (`+` = censored).
+
+```{r}
+with(iud, Surv(time, status))
+```
+
+Step by step, for the first events:
+
+- $t = 10$: $n = 18$, $d = 1$ so $\hat S = 1 \cdot (1 - 1/18) = 0.944$
+- $t = 13, 18$: censored, nothing happens to the curve, but $n$ falls to 15
+- $t = 19$: $n = 15$, $d = 1$ so $\hat S = 0.944 \cdot (1 - 1/15) = 0.881$
+
+## The full table, in R
+
+```{r}
+fit <- survfit(Surv(time, status) ~ 1, data = iud)
+tab <- tibble(
+  time = fit$time,
+  n.risk = fit$n.risk,
+  n.event = fit$n.event,
+  n.censor = fit$n.censor,
+  surv = round(fit$surv, 3)
+)
+tab
+```
+
+Check the $t = 107$ row: 3 at risk, 1 event and 2 censored **at the same time**. Convention: censored at a tie with an event are treated as at risk at that time.
+
+## `survfit()` and `summary()`
+
+```{r}
+fit <- survfit(Surv(time, status) ~ 1, data = iud)
+fit
+```
+
+```{r}
+summary(fit, times = c(26, 52, 78, 104))
+```
+
+Reading: estimated probability of continuing an IUD after 52 weeks, with 95% CI.
+
+## Plotting with `ggsurvfit`
+
+```{r}
+#| fig-height: 4.2
+survfit2(Surv(time, status) ~ 1, data = iud) |>
+  ggsurvfit() +
+  add_censor_mark() +
+  labs(x = "Weeks", y = "Probability of continued IUD use") +
+  scale_y_continuous(limits = c(0, 1))
+```
+
+`survfit2()` stores the data used, so risk tables and labels work automatically.
+
+## Add the confidence band and risk table
+
+```{r}
+#| fig-height: 4.6
+survfit2(Surv(time, status) ~ 1, data = iud) |>
+  ggsurvfit() +
+  add_confidence_interval() +
+  add_risktable() +
+  labs(x = "Weeks", y = "Probability of continued IUD use") +
+  scale_y_continuous(limits = c(0, 1))
+```
+
+::: {.callout-tip}
+Always show the **number at risk** below the curve: it shows how reliable the right tail is.
+:::
+
+## Example: multiple myeloma, overall survival
+
+48 patients, survival in months.
+
+```{r}
+#| fig-height: 4.2
+survfit2(Surv(time, status) ~ 1, data = myeloma) |>
+  ggsurvfit() +
+  add_confidence_interval() +
+  add_censor_mark() +
+  add_quantile(y_value = 0.5, linetype = 3) +
+  labs(x = "Months from diagnosis", y = "Overall survival")
+```
+
+The dotted line marks the median, read where $\hat S(t)$ first reaches 0.5 or below.
+
+## Properties and pitfalls of the KM curve
+
+- It is a **step function**; the steps get bigger where few patients remain at risk
+- If the **last observation is censored**, $\hat S(t)$ does not reach 0 and is undefined beyond it
+- Right tail is **unstable**: do not over-interpret late steps
+- Ties: several events at the same time simply give $d_j > 1$
+- Requires **independent censoring** and no calendar-time trends in survival (patients entering early and late have similar survival)
+
+::: {.callout-warning}
+## Never compute survival by `1 - (deaths / n)` when follow-up is incomplete
+That counts all censored patients as survivors to the end.
+:::
+
+# Uncertainty
+
+## Variance: Greenwood's formula
+
+$$\widehat{\mathrm{Var}}\{\hat S(t)\} = \hat S(t)^2 \sum_{j:\, t_{(j)} \le t} \frac{d_j}{n_j (n_j - d_j)}$$
+
+- Standard error $= \sqrt{\widehat{\mathrm{Var}}}$
+- A plain 95% CI $\hat S(t) \pm 1.96\,\mathrm{SE}$ can go **outside $[0, 1]$**, particularly at the ends
+- Better: build the interval on a **transformed scale** and back-transform
+
+## Confidence intervals: which type?
+
+| `conf.type` | Based on | Comment |
+|---|---|---|
+| `"plain"` | $\hat S \pm z\,\mathrm{SE}$ | can leave $[0,1]$ |
+| `"log"` (default in R) | $\log \hat S$ | stays $\ge 0$ but may exceed 1 |
+| `"log-log"` | $\log\{-\log \hat S\}$ | stays in $[0, 1]$, **recommended** |
+
+```{r}
+ci_types <- c("plain", "log", "log-log")
+map_dfr(ci_types, \(ct) {
+  f <- survfit(Surv(time, status) ~ 1, data = iud, conf.type = ct)
+  s <- summary(f, times = 100)
+  tibble(type = ct, S = s$surv, lower = s$lower, upper = s$upper)
+})
+```
+
+## CI types visually
+
+```{r}
+#| echo: false
+#| fig-height: 4.4
+map_dfr(ci_types, \(ct) {
+  f <- survfit(Surv(time, status) ~ 1, data = iud, conf.type = ct)
+  tibble(
+    type = ct,
+    time = f$time,
+    surv = f$surv,
+    lower = f$lower,
+    upper = f$upper
+  )
+}) |>
+  ggplot(aes(time, surv)) +
+  geom_step() +
+  geom_step(aes(y = lower), linetype = 2) +
+  geom_step(aes(y = upper), linetype = 2) +
+  facet_wrap(~type) +
+  coord_cartesian(ylim = c(0, 1.1)) +
+  labs(x = "Weeks", y = "Survival")
+```
+
+With only 18 patients the differences are visible; with large $n$ they are small.
+
+# Median and other summaries
+
+## Median survival time
+
+The median is the smallest $t$ with $\hat S(t) \le 0.5$.
+
+```{r}
+fit_my <- survfit(Surv(time, status) ~ 1, data = myeloma)
+fit_my
+quantile(fit_my, probs = c(0.25, 0.5, 0.75))
+```
+
+- The CI for a quantile is obtained by **inverting** the CI for $S(t)$
+- `NA` means the survival curve (or its CI) never drops to that level: e.g. "median not reached"
+
+## Why not the mean?
+
+The mean $\int_0^\infty S(t)\,dt$ needs the whole curve. If the last observation is censored, the tail is unknown.
+
+**Restricted mean survival time (RMST)** up to a horizon $\tau$:
+
+$$\mathrm{RMST}(\tau) = \int_0^{\tau} S(t)\,dt$$
+
+= average event-free time within the first $\tau$ units. Interpretable and always estimable.
+
+```{r}
+print(fit_my, rmean = 60)
+```
+
+Reading: on average these patients live `r round(summary(fit_my, rmean = 60)$table["rmean"], 1)` months out of the first 60.
+
+## Example: lung cancer data (status coded 1/2)
+
+`survival::lung`: 228 patients with advanced lung cancer. **Here `status` is 1 = censored, 2 = dead.**
+
+```{r}
+#| fig-height: 4.2
+survfit2(Surv(time, status) ~ 1, data = lung) |>
+  ggsurvfit() +
+  add_confidence_interval() +
+  add_risktable() +
+  labs(x = "Days", y = "Overall survival")
+```
+
+```{r}
+survfit(Surv(time, status) ~ 1, data = lung)
+```
+
+# Nelson–Aalen
+
+## Estimating the cumulative hazard
+
+$$\hat H(t) = \sum_{j:\, t_{(j)} \le t} \frac{d_j}{n_j}$$
+
+- Sum of the estimated event rates at each event time
+- Alternative estimate of the survivor function: $\tilde S(t) = \exp\{-\hat H(t)\}$ (Fleming–Harrington)
+- Close to Kaplan–Meier unless the risk sets are small
+
+```{r}
+tibble(
+  time = fit$time,
+  H_NA = cumsum(fit$n.event / fit$n.risk),
+  S_KM = fit$surv
+) |>
+  mutate(S_NA = exp(-H_NA)) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3))) |>
+  head(8)
+```
+
+## Nelson–Aalen in R
+
+```{r}
+#| fig-height: 4.2
+survfit2(Surv(time, status) ~ 1, data = myeloma) |>
+  ggsurvfit(type = "cumhaz") +
+  add_confidence_interval() +
+  labs(x = "Months from diagnosis", y = "Cumulative hazard")
+```
+
+Reading the shape: the **slope** of $\hat H(t)$ is the hazard. A straight line suggests a constant hazard (exponential), a convex curve an increasing hazard.
+
+## Is the hazard constant? A graphical check
+
+If $h(t) = \lambda$, then $H(t) = \lambda t$: a line through the origin.
+
+```{r}
+#| fig-height: 3.8
+survfit(Surv(time, status) ~ 1, data = myeloma) |>
+  broom::tidy() |>
+  mutate(H = -log(estimate)) |>
+  ggplot(aes(time, H)) +
+  geom_step() +
+  geom_smooth(method = "lm", se = FALSE, formula = y ~ x - 1, linetype = 2) +
+  labs(x = "Months", y = "Cumulative hazard (-log S)")
+```
+
+The more formal version of such checks comes with parametric models (Lecture 8).
+
+# Comparing groups, graphically
+
+## Example: breast cancer and HPA staining
+
+```{r}
+#| fig-height: 4.6
+survfit2(Surv(time, status) ~ stain, data = breast) |>
+  ggsurvfit() +
+  add_censor_mark() +
+  add_confidence_interval() +
+  add_risktable() +
+  labs(x = "Months from surgery", y = "Survival probability")
+```
+
+The curves look different, but is it more than chance? That is **Lecture 3** (log-rank test).
+
+## Summary table by group
+
+```{r}
+survfit(Surv(time, status) ~ stain, data = breast)
+```
+
+```{r}
+summary(
+  survfit(Surv(time, status) ~ stain, data = breast),
+  times = c(60, 120, 180)
+)[
+  c("strata", "time", "surv", "lower", "upper")
+] |>
+  as_tibble() |>
+  mutate(across(where(is.numeric), \(x) round(x, 2)))
+```
+
+Report: estimated survival at fixed times (with CI) and median survival (with CI).
+
+# Follow-up and reporting
+
+## How long is the follow-up?
+
+Median **observed** follow-up is biased downward by deaths. Two accepted solutions:
+
+- **Reverse Kaplan–Meier**: treat *censoring* as the event, then take the median
+- Report median follow-up among patients **alive** at the last contact
+
+```{r}
+fit_rev <- survfit(Surv(time, 1 - status) ~ 1, data = myeloma)
+quantile(fit_rev, probs = 0.5)
+```
+
+Compare with `median(myeloma$time)`: the two answer different questions.
+
+## Life table (actuarial) estimator
+
+Group time into intervals and use counts per interval (before computers, and still common in registers with only yearly data).
+
+- Same idea as KM, but with intervals; censored are counted as **half** at risk in the interval
+- Collett, Section 2.3
+- Kaplan–Meier is preferred when exact times are known
+
+We do not go further in this course.
+
+## What to report
+
+A good survival analysis report contains
+
+1. Definition of origin, event and censoring
+2. Number of patients and **events**, number censored
+3. **Median follow-up** (reverse KM)
+4. KM curve with a **risk table**
+5. Median survival (95% CI) and/or survival at clinically relevant times
+6. Method for the CI (`log-log` is a safe choice)
+
+## Common mistakes
+
+- Reading **median survival** off a curve where it is not yet reached
+- Over-interpreting the **tail** where few remain at risk
+- Reporting "survival rates" from `1 - deaths/n`
+- Wrong status coding (`1/2` vs `0/1`)
+- Forgetting that KM assumes **independent censoring**
+- Comparing curves by eye when the CIs overlap heavily and calling it a "difference"
+
+## Exercise (in class, 10 minutes)
+
+Use the myeloma data.
+
+1. Estimate the survival function by sex (`sex` is coded 1 and 2). Plot it with a risk table.
+2. Estimate the median survival time and 95% CI in each group.
+3. What is the estimated probability of surviving 24 months in each group?
+
+```{r}
+#| eval: false
+survfit2(Surv(time, status) ~ factor(sex), data = myeloma) |>
+  ggsurvfit() +
+  add_risktable()
+```
+
+## Take-home messages
+
+- The **Kaplan–Meier estimator** $\hat S(t) = \prod (1 - d_j/n_j)$ uses everyone at risk and accounts for censoring
+- Use a **log-log CI**, show **risk tables**, be careful in the tail
+- **Median survival** (with CI) is the standard summary; the mean needs a restriction (RMST)
+- **Nelson–Aalen** estimates $H(t)$; its slope is the hazard
+- Report the number of events and follow-up (reverse KM)
+
+**Next lecture**: comparing survival curves, log-rank and Wilcoxon tests, stratified tests.
+
+**Reading**: Collett, Chapter 2, Sections 2.1–2.5.

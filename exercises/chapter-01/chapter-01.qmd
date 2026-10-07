@@ -1,0 +1,281 @@
+---
+title: "Chapter 1: Survival analysis — Exercises"
+subtitle: "STA310 Survival Analysis (Master's in Applied Biostatistics)"
+lang: en
+solutions: false
+---
+
+Chapter 1 sets up the objects of survival analysis — censoring, the time origin and
+time scale, and the survivor, hazard and cumulative hazard functions. These exercises
+check that you can reason about censoring and the time scale, and interpret $S(t)$,
+$h(t)$ and $H(t)$ in concrete medical settings.
+
+## Special features of survival data  (Book §1.2)
+
+### Censoring in a clinical trial
+
+*Type: Concept & notation*
+
+A trial follows patients from surgery until recurrence of a tumour, up to a maximum
+of 24 months. The table gives the follow-up time (months) and what was observed for
+each patient.
+
+| Patient | Follow-up (months) | Outcome |
+|---|---|---|
+| 1 | 8  | recurrence |
+| 2 | 20 | recurrence |
+| 3 | 24 | no recurrence by end of study |
+| 4 | 15 | lost to follow-up |
+| 5 | 24 | no recurrence by end of study |
+| 6 | 12 | recurrence |
+
+(a) Which patients' times are censored, and which are observed (uncensored)?
+(b) For patient 4 (lost to follow-up at 15 months), what can we say about their time
+    to recurrence?
+(c) Why can we not simply discard the censored patients when summarising the data?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Censored: patients 3, 4 and 5 (no event was observed). Observed: patients 1, 2
+    and 6 (recurrence at a known time).
+(b) We only know that the recurrence, if any, occurred after 15 months; the exact
+    time is unknown.
+(c) Discarding them throws away the information that they were event-free up to their
+    censoring time. Only the patients who recurred (mostly early) would remain, so the
+    average time to recurrence would be biased downward.
+:::
+
+### Study time and patient time
+
+*Type: Concept & notation*
+
+A clinical trial recruits patients over a two-year period and follows each of them
+until a common closing date, after which no further information is collected.
+
+(a) Explain the difference between *study time* (calendar time) and *patient time*
+    (time since the patient's time origin) in this trial.
+(b) For a patient recruited one year after the trial starts, how does their patient
+    time relate to study time?
+(c) Why is the analysis of survival data usually based on patient time rather than
+    study time?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Study time is measured on the calendar, over the period the individual is in the
+    study; patient time is measured from that individual's own time origin (entry) to
+    the event or to censoring.
+(b) At any calendar date, that patient's study time equals their patient time plus
+    one year.
+(c) Patient time gives every individual a common, meaningful origin (their entry into
+    the study), so the resulting survival times are comparable; study time would
+    confound different recruitment dates with the follow-up already elapsed.
+:::
+
+### Choosing the time origin
+
+*Type: From research question to model*
+
+A study investigates the survival of patients with a serious disease. Patients are
+diagnosed at different calendar dates, and treatment may start some weeks after
+diagnosis. During follow-up, some patients die while others are still alive when the
+study ends.
+
+(a) Propose a sensible time origin for measuring survival time, and explain your
+    choice.
+(b) Name one alternative time origin that could be used, and describe how the choice
+    of time origin changes the question the analysis answers.
+(c) What is the endpoint (the event) in this study?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) A common choice is the date of diagnosis (or the date treatment starts). The time
+    origin should be a well-defined, comparable starting point for all patients.
+(b) For example, the date treatment starts. Survival measured from diagnosis answers
+    a different question than survival measured from the start of treatment, and the
+    two origins can also change which patients are comparable.
+(c) The endpoint is death; patients still alive at the end of follow-up are censored.
+:::
+
+### Independent censoring
+
+*Type: Assumptions*
+
+(a) Explain in your own words what *independent* (non-informative) censoring means.
+(b) Give an example of a study where censoring would NOT be independent, and explain
+    why it would then be misleading to ignore the censoring.
+(c) Why is independent censoring needed for a valid analysis of censored survival
+    data?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The censoring mechanism is unrelated to the subject's risk of the event: an
+    individual censored at time $t$ is representative of all individuals who have
+    survived to $t$.
+(b) For example, patients withdrawn from a trial because their condition has
+    deteriorated are censored *because* their prognosis is poor. Those who remain at
+    risk are then healthier than the population, so the results would be biased.
+(c) If censoring is informative, those who remain at risk are not representative of
+    the population, so the apparent survival experience of the group is distorted and
+    any conclusions would be misleading.
+:::
+
+### A misleading analysis
+
+*Type: What's wrong here?*
+
+A researcher studying time to recurrence excludes from the analysis all patients who
+had not yet had a recurrence when the study ended, and then reports the average time
+to recurrence among the remaining patients.
+
+Explain what is wrong with this approach and how it distorts the result.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.** The excluded patients are censored: they were event-free up to the end
+of the study and carry information. By dropping them, only the patients who did
+recur (mostly earlier) remain, so the average time to recurrence is underestimated
+(biased downward) and the survival experience of the group is misrepresented.
+Censored observations must be handled, not discarded.
+:::
+
+## Survivor, hazard and cumulative hazard functions  (Book §1.4)
+
+### Relating the survival and hazard functions
+
+*Type: Concept & notation*
+
+(a) How does the cumulative hazard $H(t)$ relate to the survivor function $S(t)$?
+(b) The hazard is $h(t) = -\frac{\mathrm{d}}{\mathrm{d}t}\log S(t)$. Using this,
+    express $H(t)$ in terms of $h(t)$, and explain in words what $H(t)$ accumulates.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $S(t) = \exp\{-H(t)\}$, equivalently $H(t) = -\log S(t)$. As $S(t)$ falls from 1
+    toward 0, $H(t)$ grows from 0 upward.
+(b) $H(t) = \int_0^t h(u)\,\mathrm{d}u$: the cumulative hazard adds up the hazard (the
+    total risk experienced) from time 0 up to time $t$.
+:::
+
+### Interpreting the hazard
+
+*Type: Concept & notation*
+
+Suppose that, for patients one year after a surgical procedure, the hazard of death is
+$0.2$ per year.
+
+(a) Explain in words what a hazard of $0.2$ per year means.
+(b) Explain why it is not correct to say that "20% of patients die during the next
+    year".
+(c) Can the hazard take values greater than 1? What about the survivor function
+    $S(t)$?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The hazard is the instantaneous rate of death per year among patients who have
+    survived to one year — $0.2$ events per patient-year at risk, conditional on being
+    alive at that time.
+(b) The hazard is a rate, not a probability. The proportion dying within the next
+    year is $1 - S(1)$; for a constant hazard of $0.2$ this is $1 - e^{-0.2} \approx
+    0.18$, not $0.2$. A rate is conditional on survival and is not bounded by 1,
+    whereas a probability is.
+(c) Yes — the hazard is a rate and can exceed 1. $S(t)$ is a probability and always
+    lies between 0 and 1.
+:::
+
+### True or false
+
+*Type: True / false with justification*
+
+State whether each claim is true or false and justify your answer in one sentence.
+
+(a) The hazard function can take values greater than 1.
+(b) If a subject is censored at time $t$, we know the event occurred after $t$.
+(c) $S(t)$ is a non-increasing function of $t$.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) True — the hazard is a rate, not a probability, so it is not bounded by 1.
+(b) True — right-censoring at $t$ means the subject was still event-free at $t$; the
+    event, if any, occurs after $t$ (under independent censoring).
+(c) True — as time increases, $S(t)$ can only stay constant or decrease.
+:::
+
+### Interpreting the survivor function
+
+*Type: Interpret figure*
+
+The figure shows the survivor function $S(t) = e^{-0.1 t}$ for a population with
+constant hazard $\lambda = 0.1$.
+
+```{r}
+#| echo: false
+curve(exp(-0.1 * x), from = 0, to = 40, xlab = "Time t", ylab = "S(t)", ylim = c(0, 1))
+```
+
+(a) Read off the values of $S(10)$ and $S(20)$ approximately. What does $S(10)$ mean
+    in words?
+(b) Describe the shape of the curve. Is $S(t)$ increasing or decreasing, and why?
+(c) A constant hazard $h(t) = \lambda$ implies $H(t) = \lambda t$ and hence
+    $S(t) = e^{-\lambda t}$. Verify this using the relationships in §1.4, and explain
+    why a constant hazard gives this exponential shape.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $S(10) = e^{-1} \approx 0.37$ and $S(20) = e^{-2} \approx 0.14$; $S(10)$ is the
+    probability of surviving beyond time 10.
+(b) $S(t)$ is non-increasing and tends to 0: the probability of surviving beyond $t$
+    can only fall as $t$ grows.
+(c) With $h(t) = \lambda$, $H(t) = \int_0^t \lambda\,\mathrm{d}u = \lambda t$, so
+    $S(t) = \exp\{-H(t)\} = e^{-\lambda t}$ — a decreasing exponential curve.
+:::
+
+## Mini-lab: simulating survival and censoring
+
+### Simulating a censored sample
+
+*Type: Mini-lab*
+
+Run the code below. It simulates $n = 500$ exponential survival times with hazard
+$\lambda = 0.1$, and then introduces independent censoring times
+$C \sim \mathrm{Uniform}(0, 15)$.
+
+```{r}
+#| echo: true
+set.seed(1)
+n <- 500
+lambda <- 0.1
+times <- rexp(n, rate = lambda)
+
+hist(times, probability = TRUE, breaks = 30,
+     main = "Simulated exponential survival times")
+
+c <- runif(n, 0, 15)
+censored <- c < times
+cat("Censoring proportion:", round(mean(censored), 3), "\n")
+```
+
+(a) The histogram is positively skewed, with a long right tail. Why is this typical of
+    survival data (§1.2)?
+(b) For an exponential survival time the hazard is constant, $h(t) = \lambda$. Use the
+    relationships in §1.4 to find $S(t)$ and $H(t)$.
+(c) What proportion of the observations are censored, and what does "censored" mean
+    for one of these observations?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Survival times are generally not symmetric: there is a long tail of individuals
+    who survive a long time, so the histogram is right-skewed and a normal model is
+    therefore inappropriate.
+(b) $H(t) = \int_0^t \lambda\,\mathrm{d}u = \lambda t$ and
+    $S(t) = \exp\{-H(t)\} = e^{-\lambda t}$.
+(c) Roughly half (about $0.52$, as printed): for those observations we only know that
+    the survival time exceeds the generated censoring time, not its exact value.
+:::

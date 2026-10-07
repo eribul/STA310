@@ -1,0 +1,635 @@
+---
+title: "Lecture 12: Competing Risks I"
+subtitle: "STA310 Survival Analysis · Collett Chapter 12 (sections 12.1–12.3, Example 12.7)"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival); library(ggsurvfit); library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+liver <- read.table(file.path(data_dir, "Survival of liver transplant recipients.dat"), header = TRUE)
+# Set-up shared with Lecture 13 (same object names, labels, reference levels)
+liver <- liver |>
+  mutate(gender = factor(gender, 1:2, c("Male", "Female")),
+         disease = factor(disease, 1:3, c("PBC", "PSC", "ALD")),
+         disease = relevel(disease, ref = "ALD"),
+         cause = factor(cof, 0:4, c("censored", "rejection", "thrombosis", "recurrent disease", "other")))
+n_died_functioning <- 211   # deaths with functioning graft, quoted from Collett Example 12.1 (not in the data file)
+mice <- read.table(file.path(data_dir, "Survival of laboratory mice.dat"), header = TRUE)
+mice$environment <- factor(mice$environment, levels = 1:2, labels = c("Standard", "Germ-free"))
+mice$cause <- factor(mice$causeofdeath, levels = 0:3,
+  labels = c("censored", "thymic lymphoma", "reticulum cell sarcoma", "other"))
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. What are competing risks?
+2. Why 1 − KM is biased
+3. Data set-up in R
+4. Cause-specific hazards and the cumulative incidence function
+5. Aalen–Johansen estimation and plots
+6. Comparing groups: Gray's test, cause-specific log-rank
+7. Probability versus rate
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+You can
+
+- recognise a competing risks situation
+- explain why 1 − KM overestimates the risk
+- estimate and plot cumulative incidence functions in R
+- compare CIFs between groups
+- distinguish "probability" (CIF) from "rate" (cause-specific hazard)
+:::
+:::
+
+# Concepts
+
+## Motivation: more than one way for the story to end
+
+Standard survival analysis: one event, everything else is (non-informative) censoring.
+
+Often, several **different** endpoints are possible, and the first one that occurs **prevents** (or changes the meaning of) the others:
+
+- Death from cancer vs. death from other causes
+- Graft failure from rejection, thrombosis, recurrent disease, other causes (and death with a functioning graft)
+- Liver transplant vs. death without transplant (e.g. in a trial of a drug for liver disease)
+- Progression of a pre-malignant condition vs. death before progression
+
+. . .
+
+::: {.callout-note}
+## Collett 12.1
+"A competing risk prevents the occurrence of an event of particular interest." Each individual contributes a pair $(T, C)$: time and **cause** $C \in \{0, 1, \dots, m\}$, where $0$ = censored.
+:::
+
+## Competing risks as a diagram
+
+```{mermaid}
+flowchart LR
+  A["Event-free<br/>(at time 0)"] -->|"h1(t)"| B["Event 1<br/>(of interest)"]
+  A -->|"h2(t)"| C["Event 2<br/>(competing)"]
+  A -->|"hm(t)"| D["Event m"]
+```
+
+- Only **one** transition is observed per person: the first one
+- Each arrow has its own **cause-specific hazard** $h_k(t)$
+- After a competing event, the event of interest can no longer happen (death) or is no longer comparable (e.g. a transplant)
+
+## Example 1: liver transplant recipients
+
+`r nrow(liver)` adult first liver transplants (2000–2010). Time to graft failure; cause `cof`: 0 = functioning graft (censored), 1 = rejection, 2 = thrombosis, 3 = recurrent disease, 4 = other.
+
+```{r}
+table(liver$cause)
+```
+
+Only `r sum(liver$cof > 0)` (`r round(100 * mean(liver$cof > 0))`%) fail. In these data, patients who **die with a functioning graft** (`r n_died_functioning` according to Collett) are recorded as censored (`cof = 0`) at their time of death. Graft failure CIFs therefore treat death with a functioning graft as **censoring**, not as a competing event. Death is a competing event for graft failure, but it is not modelled as one here.
+
+```{r}
+liver |> count(disease, cause) |> pivot_wider(names_from = cause, values_from = n)
+```
+
+## Example 2: MGUS (monoclonal gammopathy)
+
+`survival::mgus2`: `r nrow(mgus2)` Mayo Clinic patients with monoclonal gammopathy of undetermined significance (MGUS). It can progress to a plasma cell malignancy (myeloma, lymphoma, amyloidosis ...). Patients are mostly elderly, so many die first.
+
+From `?mgus2`: `ptime` = time to progression **or last contact**, `pstat` = progression (1/0), `futime` = time to death or last contact, `death` = death (1/0). Time in months.
+
+```{r}
+mgus2 |> select(id, age, sex, ptime, pstat, futime, death) |> head(4)
+with(mgus2, table(pstat, death))
+```
+
+## Building the event variable for MGUS
+
+Time to **first** event: progression if it occurred, otherwise death or censoring.
+
+```{r}
+# Same set-up in Lecture 13. hgb (needed for the regression models there) is missing
+# for some patients; we drop them here too, so that both lectures use identical data.
+mgus <- mgus2 |>
+  filter(!is.na(hgb)) |>
+  mutate(etime = ifelse(pstat == 1, ptime, futime),
+         event = factor(case_when(pstat == 1 ~ 1, death == 1 ~ 2, TRUE ~ 0),
+                        levels = 0:2, labels = c("censored", "progression", "death")))
+for (v in names(mgus)) attr(mgus[[v]], "label") <- NULL   # drop variable labels
+table(mgus$event)
+```
+
+`r sum(is.na(mgus2$hgb))` patients with missing `hgb` are dropped, leaving `r nrow(mgus)`.
+
+- `0` (first level, "censored") must be censoring; `survfit` and `tidycmprsk` expect this
+- Patients who progress and then die only count as **progression**: the first event ends the follow-up for this analysis
+
+## Example 3: laboratory mice (Hoel 1972)
+
+RFM male mice exposed to 300 rads of radiation; standard vs germ-free environment. Cause of death at autopsy: 1 = thymic lymphoma, 2 = reticulum cell sarcoma, 3 = other. **No censoring**: all mice die.
+
+```{r}
+with(mice, table(environment, cause))
+```
+
+Question: does the environment change the risk of dying of each cause?
+
+## Example 4: primary biliary cholangitis, transplant vs death
+
+`survival::pbc`: Mayo Clinic trial of D-penicillamine. `status`: 0 = censored, 1 = liver transplant, 2 = dead. Transplant and death without transplant are competing events: whichever happens first ends the follow-up for the other.
+
+```{r}
+pbc2 <- pbc |> filter(!is.na(trt)) |>
+  mutate(event = factor(status, 0:2, c("censored", "transplant", "death")))
+table(pbc2$event)
+```
+
+# Why not just 1 − KM?
+
+## The tempting approach
+
+To get "the probability of event 1 by time $t$": treat all other events as censored and compute $1 - \hat S_{KM}(t)$.
+
+. . .
+
+This estimates a **hypothetical** quantity: the risk if the competing events could not occur. Patients who died of another cause are treated as if they were still at risk of the event of interest (they are "censored", i.e. assumed to behave like those still followed).
+
+. . .
+
+In reality they are **no longer at risk**. So 1 − KM is too large: it counts risk that belongs to people who will never experience event 1.
+
+::: {.callout-warning}
+Collett 12.2.1: "there are pitfalls to using the Kaplan–Meier estimate ... to summarise such data". The bias grows with the frequency of competing events.
+:::
+
+## Numerical demonstration: MGUS
+
+```{r}
+# naive: death treated as censoring
+km <- survfit(Surv(etime, event == "progression") ~ 1, data = mgus)
+# correct: Aalen-Johansen estimate of cumulative incidence
+aj <- survfit(Surv(etime, event) ~ 1, data = mgus)
+aj$states
+
+times <- c(120, 240, 360)
+s_km <- summary(km, times = times)
+s_aj <- summary(aj, times = times)
+tibble(months = times,
+       naive_1_minus_KM = round(1 - s_km$surv, 3),
+       CIF_progression = round(s_aj$pstate[, 2], 3),
+       CIF_death = round(s_aj$pstate[, 3], 3))
+```
+
+## Interpretation: MGUS
+
+At 20 years (240 months): 1 − KM gives `r round(1 - summary(km, times = 240)$surv, 3)`, the Aalen–Johansen CIF gives `r round(summary(aj, times = 240)$pstate[, 2], 3)`. That is an overestimate of about `r round(100 * ((1 - summary(km, times = 240)$surv) / summary(aj, times = 240)$pstate[, 2] - 1))`% in relative terms.
+
+```{r}
+#| echo: false
+#| fig-height: 3.8
+bind_rows(
+  tibble(time = km$time, risk = 1 - km$surv, method = "1 - KM (death censored)"),
+  tibble(time = aj$time, risk = aj$pstate[, 2], method = "Aalen-Johansen CIF")) |>
+  ggplot(aes(time, risk, colour = method)) + geom_step(linewidth = 1) +
+  labs(x = "Months", y = "Probability of progression", colour = NULL) +
+  theme(legend.position = "top")
+```
+
+## Liver transplants: same message
+
+Graft failure from rejection; all other failures (and censoring) as censoring versus proper CIF.
+
+```{r}
+km_l <- survfit(Surv(time, cause == "rejection") ~ 1, data = liver)
+aj_l <- survfit(Surv(time, cause) ~ 1, data = liver)
+tt <- c(365, 1095, 1825)
+tibble(days = tt,
+       naive = round(1 - summary(km_l, times = tt)$surv, 4),
+       CIF = round(summary(aj_l, times = tt)$pstate[, 2], 4))
+```
+
+Here the other graft failure causes are rare (and death with a functioning graft is censored anyway), so the bias is small. **The bias depends on how common competing events are** and on the follow-up length. In the MGUS data (elderly, many deaths) it is large.
+
+## Why does 1 − KM overshoot? A picture
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+a <- survfit(Surv(etime, event) ~ 1, data = mgus)
+tibble(time = a$time, Progression = a$pstate[, 2], Death = a$pstate[, 3],
+       `Event-free` = a$pstate[, 1],
+       KM_naive = 1 - km$surv[match(a$time, km$time)]) |>
+  ggplot(aes(time)) +
+  geom_step(aes(y = Progression, colour = "CIF progression"), linewidth = 1) +
+  geom_step(aes(y = Death, colour = "CIF death"), linewidth = 1) +
+  geom_step(aes(y = `Event-free`, colour = "Event-free (all causes)"), linewidth = 1) +
+  labs(x = "Months", y = "Probability", colour = NULL) + theme(legend.position = "top")
+```
+
+The three curves always add to 1. 1 − KM is not part of this system: it ignores the competing deaths.
+
+# Setting up data
+
+## Data layout
+
+One row per person, with
+
+- `time`: time to **first** event or censoring
+- `event`: a **factor** whose first level is censoring, then the causes
+
+```{r}
+mgus |> select(id, etime, event) |> head(5)
+levels(mgus$event)
+```
+
+. . .
+
+In `survival` (>= 3.0) `Surv(time, event_factor)` creates a **multi-state** survival object:
+
+```{r}
+Surv(mgus$etime, mgus$event)[1:5]
+```
+
+::: {.callout-warning}
+If `event` is numeric 0/1/2, `Surv(time, event)` assumes 0/1 or 1/2 coding for a **single** event. Use a factor!
+:::
+
+# Hazards and cumulative incidence
+
+## Cause-specific hazard
+
+$$h_k(t) = \lim_{\Delta t \to 0} \frac{P(t \le T < t + \Delta t,\; C = k \mid T \ge t)}{\Delta t}$$
+
+Instantaneous rate of an event of type $k$ among those **still event-free** at $t$ (not yet having had any event).
+
+- Overall hazard: $h(t) = \sum_{k=1}^m h_k(t)$
+- Cumulative cause-specific hazard $H_k(t) = \int_0^t h_k(u)\,du$
+- Overall (event-free) survival:
+
+$$S(t) = P(T > t) = \exp\Big\{-\sum_{k=1}^m H_k(t)\Big\}$$
+
+. . .
+
+Cause-specific hazards **are** estimable from the data: treat other causes as censored. That is legitimate for hazards (Collett 12.3.1), though not for probabilities.
+
+## Cumulative incidence function (CIF)
+
+$$\mathrm{CIF}_k(t) = P(T \le t,\; C = k) = \int_0^t S(u-)\, h_k(u)\, du$$
+
+Reading the integrand: to have an event of type $k$ at time $u$, you must
+
+1. be event-free just before $u$: probability $S(u-)$ (**all** causes), and
+2. have an event of type $k$ at $u$: rate $h_k(u)$.
+
+. . .
+
+Properties:
+
+- $\mathrm{CIF}_k(t)$ is increasing, starts at 0, and **plateaus below 1** (as $t\to\infty$ it reaches $P(C=k) < 1$ if other causes occur)
+- $\sum_k \mathrm{CIF}_k(t) + S(t) = 1$ for all $t$
+- It depends on **all** hazards, not only $h_k$
+
+## The Aalen–Johansen estimator
+
+With event times $t_{(j)}$, $d_{kj}$ events of type $k$, $d_j = \sum_k d_{kj}$, and $n_j$ at risk:
+
+$$\hat h_k(t_{(j)}) = \frac{d_{kj}}{n_j}, \qquad \hat S(t_{(j)}) = \prod_{l \le j}\Big(1 - \frac{d_l}{n_l}\Big) \;(\text{ordinary KM, any event})$$
+
+$$\widehat{\mathrm{CIF}}_k(t) = \sum_{j:\, t_{(j)} \le t} \hat S(t_{(j)}-)\,\frac{d_{kj}}{n_j}, \qquad \hat S(t_{(j)}-) = \hat S(t_{(j-1)})$$
+
+- Without censoring: equals the observed proportion with cause $k$ by time $t$
+- Implemented in `survfit()` (multi-state), `cmprsk::cuminc()` and `tidycmprsk::cuminc()`
+- The estimates are the same; the packages differ in output and in extra tools
+
+## Small worked example
+
+Eight patients; times in months, cause 1 = progression, 2 = death, 0 = censored.
+
+```{r}
+toy <- tibble(time = c(2, 3, 3, 5, 6, 8, 9, 10), cause = c(1, 2, 0, 1, 2, 1, 0, 2))
+toy
+```
+
+. . .
+
+- $t=2$: $n=8$, $\hat S(0)=1$, $\widehat{\mathrm{CIF}}_1 = 1\cdot 1/8 = 0.125$; $\hat S(2) = 7/8$
+- $t=3$: $n=7$, one death and one censored: $\widehat{\mathrm{CIF}}_2 = 0.875\cdot 1/7 = 0.125$; $\hat S(3) = 0.875 \cdot 6/7 = 0.75$ (censored tie counts as at risk)
+- $t=5$: $n=5$, $\widehat{\mathrm{CIF}}_1 = 0.125 + 0.75 \cdot 1/5 = 0.275$
+
+## Check the toy example in R
+
+```{r}
+f <- survfit(Surv(time, factor(cause, 0:2, c("censored", "progression", "death"))) ~ 1, data = toy)
+tibble(time = f$time, n.risk = f$n.risk, event_free = round(f$pstate[, 1], 3),
+       CIF_prog = round(f$pstate[, 2], 3), CIF_death = round(f$pstate[, 3], 3))
+```
+
+Each row: the three probabilities add to 1.
+
+# Estimation in R
+
+## Aalen–Johansen with `survfit()`
+
+```{r}
+aj <- survfit(Surv(etime, event) ~ 1, data = mgus)
+aj
+summary(aj, times = c(120, 240))
+```
+
+`pstate` columns: event-free (`(s0)`), progression, death.
+
+## `tidycmprsk::cuminc()`
+
+```{r}
+cif <- tidycmprsk::cuminc(Surv(etime, event) ~ 1, data = mgus)
+cif
+tidycmprsk::tidy(cif, times = c(120, 240)) |>
+  select(outcome, time, estimate, conf.low, conf.high) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+The `cuminc` object stores CIFs for **each** event type (not for censoring).
+
+## Plotting CIFs with `ggsurvfit`
+
+```{r}
+#| fig-height: 4.4
+cif |>
+  ggcuminc(outcome = c("progression", "death")) +
+  add_confidence_interval() +
+  add_risktable() +
+  labs(x = "Months from MGUS diagnosis", y = "Cumulative incidence")
+```
+
+## Stacked CIFs: where do the patients go?
+
+The areas show how the population is distributed over the states over time. The top of the stack is the total risk of any event.
+
+```{r}
+#| fig-height: 4.2
+tibble(time = aj$time, Progression = aj$pstate[, 2], Death = aj$pstate[, 3]) |>
+  pivot_longer(-time, names_to = "state") |>
+  mutate(state = factor(state, c("Death", "Progression"))) |>
+  ggplot(aes(time, value, fill = state)) + geom_area() +
+  labs(x = "Months", y = "Cumulative probability", fill = NULL)
+```
+
+The gap above the stack is event-free survival $\hat S(t)$.
+
+## Interpretation: MGUS
+
+- By 20 years `r round(100 * summary(aj, times = 240)$pstate[, 2])`% of patients are estimated to have progressed, but `r round(100 * summary(aj, times = 240)$pstate[, 3])`% have died without progression.
+- At 20 years the CIF of death without progression is `r ifelse(summary(aj, times = 240)$pstate[, 3] > summary(aj, times = 240)$pstate[, 2], "larger", "smaller")` than the CIF of progression (see the plot above).
+- Clinical message: in this elderly cohort death without progression is a major competing event, so reporting 1 − KM would exaggerate the progression risk.
+
+The CIFs at a given time add up to the **total risk** of any first event, $1 - \hat S(t)$ (here at 240 months: `r round(1 - summary(aj, times = 240)$pstate[, 1], 3)`).
+
+## Mice: CIFs by environment
+
+`cause` has no censored observations, but the factor still needs a first level for "censored" (empty here); otherwise the first cause would be taken as censoring.
+
+```{r}
+levels(mice$cause)
+ci_mice <- tidycmprsk::cuminc(Surv(time, cause) ~ environment, data = mice)
+ci_mice
+```
+
+## Mice: all three causes
+
+```{r}
+#| fig-height: 4.6
+ci_mice |>
+  ggcuminc(outcome = c("thymic lymphoma", "reticulum cell sarcoma", "other")) +
+  facet_wrap(~outcome) +
+  labs(x = "Days", y = "Cumulative incidence") +
+  theme(legend.position = "top")
+```
+
+## Interpretation: mice
+
+```{r}
+tm <- tidycmprsk::tidy(ci_mice, times = 800) |>
+  select(outcome, strata, estimate) |>
+  pivot_wider(names_from = strata, values_from = estimate) |>
+  mutate(higher_in = ifelse(`Germ-free` > Standard, "Germ-free", "Standard"),
+         across(where(is.numeric), \(x) round(x, 2)))
+tm
+```
+
+Cumulative incidence at 800 days (no censoring, so these are crude proportions). The environment with the higher CIF is given in the last column: `r str_c(tm$outcome, " (", tm$higher_in, ")", collapse = "; ")`. Collett Example 12.7 describes the same pattern. Gray's and the cause-specific log-rank tests (next section) quantify the evidence.
+
+## Liver transplants: CIFs by cause
+
+```{r}
+#| fig-height: 4.4
+ci_liv <- tidycmprsk::cuminc(Surv(time, cause) ~ 1, data = liver)
+ci_liv |>
+  ggcuminc(outcome = c("rejection", "thrombosis", "recurrent disease", "other")) +
+  labs(x = "Days after transplant", y = "Cumulative incidence of graft failure") +
+  theme(legend.position = "top")
+```
+
+```{r}
+tidycmprsk::tidy(ci_liv, times = 3 * 365) |>
+  select(outcome, estimate) |> mutate(estimate = round(estimate, 3))
+```
+
+## Using `cmprsk::cuminc()` directly
+
+```{r}
+cm <- cmprsk::cuminc(ftime = liver$time, fstatus = liver$cof, group = liver$disease)
+names(cm)
+cm$Tests
+```
+
+`cm` is a list: `"ALD 1"`, `"ALD 2"` ... = group and cause; `time`, `est`, `var` for each. The `Tests` matrix is Gray's test for each cause.
+
+# Comparing groups
+
+## Two questions, two tests
+
+When comparing groups (treatment, disease, environment) we can ask about
+
+1. **Probability**: does the cumulative incidence of cause $k$ differ? Gray's test.
+2. **Rate**: does the cause-specific hazard $h_k(t)$ differ? Cause-specific log-rank test (other causes censored).
+
+. . .
+
+They can give different answers. Gray's test compares CIFs and so is also affected by group differences in the competing hazards.
+
+## Gray's test
+
+Null hypothesis: $\mathrm{CIF}_k(t)$ equal in all groups, for a given cause $k$.
+
+```{r}
+cuminc_dis <- tidycmprsk::cuminc(Surv(time, cause) ~ disease, data = liver)
+cuminc_dis |> tidycmprsk::glance()
+```
+
+Gray's test is a test of equality of the cumulative incidence functions between groups, performed for each cause separately. It can be seen as a weighted comparison of the **subdistribution** hazards. Stratification is possible, adjustment for covariates is not (see Lecture 13).
+
+## Liver: CIFs by primary disease
+
+```{r}
+#| fig-height: 4.4
+cuminc_dis |>
+  ggcuminc(outcome = c("rejection", "recurrent disease")) +
+  facet_wrap(~outcome) +
+  labs(x = "Days", y = "Cumulative incidence") + theme(legend.position = "top")
+```
+
+```{r}
+#| echo: false
+gt <- tidycmprsk::glance(cuminc_dis)
+```
+
+```{r}
+#| echo: false
+gp <- setNames(c(gt$p.value_1, gt$p.value_2, gt$p.value_3, gt$p.value_4), c(gt$outcome_1, gt$outcome_2, gt$outcome_3, gt$outcome_4))
+ev <- \(k) ifelse(gp[k] < 0.05, "a difference at the 5% level", "no difference at the 5% level")
+```
+
+Gray's test gives p = `r signif(gp["rejection"], 2)` for rejection (`r ev("rejection")`) and p = `r signif(gp["recurrent disease"], 2)` for recurrent disease (`r ev("recurrent disease")`). Compare with the cause-specific log-rank tests on the next slide.
+
+## Cause-specific log-rank tests
+
+Treat other causes as censoring and use the ordinary log-rank test, once per cause:
+
+```{r}
+for (k in levels(liver$cause)[-1]) {
+  lr <- survdiff(Surv(time, cause == k) ~ disease, data = liver)
+  cat(sprintf("%-18s chi2 = %5.2f on %d df, p = %.4f\n", k, lr$chisq, length(lr$n) - 1,
+              pchisq(lr$chisq, length(lr$n) - 1, lower.tail = FALSE)))
+}
+```
+
+Compare with Gray's test. Agreement is common but not guaranteed.
+
+## Mice: Gray's test and cause-specific log-rank
+
+```{r}
+gm <- tidycmprsk::glance(ci_mice)
+tibble(cause = c(gm$outcome_1, gm$outcome_2, gm$outcome_3),
+       gray_p = c(gm$p.value_1, gm$p.value_2, gm$p.value_3))
+```
+
+```{r}
+for (k in levels(mice$cause)[-1]) {
+  lr <- survdiff(Surv(time, cause == k) ~ environment, data = mice)
+  cat(sprintf("%-24s log-rank p = %.2g\n", k, lr$pvalue))
+}
+```
+
+# Probability versus rate
+
+## The key conceptual slide
+
+| | Cause-specific hazard $h_k(t)$ | Cumulative incidence $\mathrm{CIF}_k(t)$ |
+|---|---|---|
+| Question | How fast do type-$k$ events happen **among those still event-free**? | What **fraction of all patients** will have a type-$k$ event by $t$? |
+| Type | rate (per unit time) | probability |
+| Depends on | cause $k$ only | **all** causes |
+| Estimate | $d_{kj}/n_j$, other causes censored | Aalen–Johansen |
+| Use | aetiology, biological effect | prediction, absolute risk, planning |
+
+. . .
+
+A treatment can reduce $h_1$ and still increase $\mathrm{CIF}_1$, if it also reduces the competing hazard $h_2$ (people live long enough to experience event 1).
+
+## Worked numerical example
+
+Constant hazards, $h_1 = 0.10$ per year in **both** populations. Population A: no competing risk ($h_2=0$). Population B: $h_2 = 0.40$.
+
+$$\mathrm{CIF}_1(t) = \frac{h_1}{h_1 + h_2}\left(1 - e^{-(h_1 + h_2)t}\right)$$
+
+```{r}
+cif1 <- \(t, h1, h2) h1 / (h1 + h2) * (1 - exp(-(h1 + h2) * t))
+tibble(year = c(1, 5, 10, 20),
+       `A: h2 = 0` = cif1(year, 0.1, 0),
+       `B: h2 = 0.4` = cif1(year, 0.1, 0.4)) |>
+  mutate(across(-year, \(x) round(x, 3)))
+```
+
+. . .
+
+The rate of event 1 is identical, but the 10-year probability is `r round(cif1(10, 0.1, 0), 2)` in A and only `r round(cif1(10, 0.1, 0.4), 2)` in B. In the limit $t\to\infty$: $1$ vs $h_1/(h_1+h_2) = 0.2$.
+
+## Same hazard, different CIF
+
+```{r}
+#| echo: false
+#| fig-height: 4.2
+expand_grid(t = seq(0, 20, 0.1), pop = c("A: no competing risk", "B: h2 = 0.4")) |>
+  mutate(cif = ifelse(pop == "B: h2 = 0.4", cif1(t, 0.1, 0.4), cif1(t, 0.1, 0))) |>
+  ggplot(aes(t, cif, colour = pop)) + geom_line(linewidth = 1.1) +
+  labs(x = "Years", y = expression(CIF[1](t)), colour = NULL) + theme(legend.position = "top")
+```
+
+The CIF of event 1 depends on the competing hazard. Comparing two groups with different competing risks can reverse the ranking of CIFs even when $h_1$ is the same.
+
+## Which one to report?
+
+- **Aetiological question** ("does exposure X act on the biology of cause 1?"): cause-specific hazards
+- **Prognosis/absolute risk** ("what is this patient's chance of cause 1 by 5 years?"): CIF
+- Best practice: report **both**, for every cause, with the CIFs plotted together
+- Regression for each of them (cause-specific Cox, Fine–Gray) is the topic of **Lecture 13**
+
+## Medical illustration: PBC, transplant vs death
+
+```{r}
+#| fig-height: 4.2
+ci_pbc <- tidycmprsk::cuminc(Surv(time, event) ~ trt, data = pbc2 |> mutate(trt = factor(trt, 1:2, c("D-penicillamine", "Placebo"))))
+ci_pbc |>
+  ggcuminc(outcome = c("transplant", "death")) + facet_wrap(~outcome) +
+  labs(x = "Days", y = "Cumulative incidence") + theme(legend.position = "top")
+tidycmprsk::glance(ci_pbc)
+```
+
+```{r}
+#| echo: false
+gb <- tidycmprsk::glance(ci_pbc)
+gpb <- setNames(c(gb$p.value_1, gb$p.value_2), c(gb$outcome_1, gb$outcome_2))
+```
+
+Gray's test for the treatment arms: p = `r signif(gpb["transplant"], 2)` for transplant and p = `r signif(gpb["death"], 2)` for death, i.e. `r ifelse(all(gpb >= 0.05), "no difference between the arms at the 5% level for either outcome", "a difference at the 5% level for at least one outcome")`. Transplant and death are competing: whichever occurs first ends the follow-up for the other.
+
+## In-class exercise
+
+Use the MGUS data (`mgus`, with `etime` and `event`) and a sex split.
+
+1. Estimate CIFs of progression and death for men and women with `tidycmprsk::cuminc(Surv(etime, event) ~ sex, data = mgus)`.
+2. Read off the CIF of progression at 10 years (120 months) in each sex.
+3. Run Gray's test (`glance()`). Which causes differ?
+4. Run a cause-specific log-rank test for each cause and compare with Gray's test.
+5. Explain: why can the CIF of progression differ between the sexes even if the progression hazards are similar?
+
+```{r}
+#| eval: false
+# starting point
+ci_sex <- tidycmprsk::cuminc(Surv(etime, event) ~ sex, data = mgus)
+```
+
+## Pitfalls
+
+- Do not use 1 − KM with competing events censored to estimate the absolute risk
+- Competing events must be defined **before** analysis: what counts as censoring (loss to follow-up) vs competing (death)
+- Cause-specific censoring remains assumed to be independent of the event process
+- CIFs of all causes should be displayed together; the sum is the total risk
+- Death with a functioning graft in the liver data was recorded as censored (`cof = 0`): the graft failure CIFs treat it as censoring, not as a competing event
+
+## Take-home messages
+
+- **Competing risks**: an event that prevents the event of interest; ordinary censoring is wrong for them when we want probabilities
+- 1 − KM overestimates risk; use the **cumulative incidence function** $\mathrm{CIF}_k(t)=\int_0^t S(u-)h_k(u)\,du$ (Aalen–Johansen)
+- Data: time to first event plus a cause **factor** with censoring as the first level
+- CIFs plus event-free survival add to 1
+- Compare groups with **Gray's test** (probabilities) or **cause-specific log-rank** (rates); report both
+- A CIF depends on **all** cause-specific hazards
+
+**Next lecture**: Competing risks II, regression (cause-specific Cox and Fine–Gray models)
+
+**Reading**: Collett, Chapter 12 (Sections 12.1–12.3 and Example 12.7)

@@ -1,0 +1,34 @@
+/*-- scss:defaults --*/
+$font-family-sans-serif: "Helvetica Neue", Helvetica, Arial, sans-serif;
+$presentation-heading-color: #1b3a5c;
+$link-color: #1b6ca8;
+
+/*-- scss:rules --*/
+.reveal .slide-number {
+  font-size: 0.5em;
+}
+
+.reveal pre code {
+  font-size: 0.75em;
+  max-height: 560px;
+}
+
+.reveal .small {
+  font-size: 0.75em;
+}
+
+.reveal .tiny {
+  font-size: 0.6em;
+}
+
+.reveal table {
+  font-size: 0.7em;
+}
+
+.reveal .callout {
+  font-size: 0.85em;
+}
+
+.reveal h2 {
+  font-size: 1.5em;
+}

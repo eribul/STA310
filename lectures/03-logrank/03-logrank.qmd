@@ -1,0 +1,575 @@
+---
+title: "Lecture 3: Comparing Survival Curves"
+subtitle: "STA310 Survival Analysis · Collett Chapter 2 (part 2)"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+rd <- function(f) read.table(file.path(data_dir, f), header = TRUE)
+breast <- rd("Prognosis for women with breast cancer.dat")
+breast$stain <- factor(breast$stain, levels = 1:2, labels = c("Negative", "Positive"))
+gastric <- rd("Survival of patients with gastric cancer.dat")
+gastric$treat <- factor(gastric$treat, levels = 0:1, labels = c("Chemotherapy", "Chemo + radiation"))
+melanoma <- rd("Survival times of patients with melanoma .dat")
+melanoma$treatment <- factor(melanoma$treatment, levels = 1:2, labels = c("BCG", "C. parvum"))
+melanoma$age <- factor(melanoma$age, levels = 1:3, labels = c("21-40", "41-60", "61+"))
+hepat <- rd("Chronic active hepatitis.dat")
+hepat$treatment <- factor(hepat$treatment, levels = 1:2, labels = c("Group 1", "Group 2"))
+prostate <- rd("Comparison of two treatments for prostatic cancer.dat")
+prostate$treatment <- factor(prostate$treatment)
+ovar <- rd("Chemotherapy in ovarian cancer patients.dat")
+ovar$treat <- factor(ovar$treat)
+hyper <- rd("Treatment of hypernephroma.dat")
+hyper$nephrectomy <- factor(hyper$nephrectomy, levels = 0:1, labels = c("No", "Yes"))
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. Recap and the question
+2. Null hypothesis and the idea of the log-rank test
+3. Worked example by hand
+4. The test in R, examples
+5. Weighted tests: Wilcoxon, Peto–Peto, Fleming–Harrington
+6. Which test? Crossing curves, simulation
+7. More than two groups, trend
+8. Stratified tests
+9. Limitations
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+You can
+
+- state $H_0$ and explain what the log-rank statistic compares
+- compute a log-rank test by hand for a small data set
+- run and interpret `survdiff()`
+- explain when weighted tests or stratification are appropriate
+- name the limitations of a p-value from a test
+:::
+:::
+
+## Recap
+
+- Kaplan–Meier estimates $\hat S(t)$ without a distributional assumption; Greenwood gives standard errors.
+- Last time we ended with a **graphical** comparison: breast cancer patients with negative vs positive HPA staining.
+
+```{r}
+#| fig-height: 3.8
+survfit2(Surv(time, status) ~ stain, data = breast) |>
+  ggsurvfit() + add_censor_mark() +
+  labs(x = "Time (months)", y = "Survival probability") +
+  scale_y_continuous(limits = c(0, 1))
+```
+
+. . .
+
+**Question today**: is the visible difference larger than what chance alone could produce?
+
+# The null hypothesis
+
+## Two groups, one hypothesis
+
+Two groups with survivor functions $S_1(t)$, $S_2(t)$ and hazards $h_1(t)$, $h_2(t)$.
+
+$$H_0: S_1(t) = S_2(t) \text{ for all } t \quad\Longleftrightarrow\quad h_1(t) = h_2(t) \text{ for all } t$$
+
+- The hypothesis concerns the **whole curve**, not a single time point and not the median.
+- Collett (Section 2.6): the tests are **non-parametric**, with no assumption on the shape of the common survivor function.
+- Alternative: curves differ somewhere. Tests differ in **where** they look.
+
+. . .
+
+::: {.callout-warning}
+## Do not compare survival at one time point or the medians by eye
+
+Overlapping confidence intervals for $\hat S(t)$ at a fixed $t$ do not give a valid test of $H_0$. Use a test that uses the **whole follow-up**.
+:::
+
+## The idea
+
+Look at each event time, one at a time. If $H_0$ holds, the death at time $t_{(j)}$ is equally likely to come from **any** of the $n_j$ patients at risk, regardless of group.
+
+. . .
+
+So at each event time, with $n_{1j}$ at risk in group 1 and $n_j$ in total, and $d_j$ events in total:
+
+$$E_{1j} = d_j \frac{n_{1j}}{n_j}$$
+
+is the **expected** number of events in group 1 if group does not matter.
+
+. . .
+
+Sum over all event times and compare with the observed number:
+
+$$O_1 - E_1 = \sum_j (d_{1j} - E_{1j})$$
+
+Large $|O_1 - E_1|$ is evidence against $H_0$.
+
+## The 2 x 2 table at each event time
+
+At event time $t_{(j)}$:
+
+| | Event | No event | At risk |
+|---|---|---|---|
+| Group 1 | $d_{1j}$ | $n_{1j} - d_{1j}$ | $n_{1j}$ |
+| Group 2 | $d_{2j}$ | $n_{2j} - d_{2j}$ | $n_{2j}$ |
+| Total | $d_j$ | $n_j - d_j$ | $n_j$ |
+
+Conditional on the margins, under $H_0$, $d_{1j}$ is **hypergeometric**:
+
+$$E_{1j} = \frac{n_{1j} d_j}{n_j}, \qquad V_{j} = \frac{n_{1j} n_{2j} d_j (n_j - d_j)}{n_j^2 (n_j - 1)}$$
+
+Censored patients contribute only through $n_{1j}, n_{2j}$ (they are in the risk set until censored).
+
+## The log-rank statistic
+
+$$U_L = \sum_{j=1}^r (d_{1j} - E_{1j}) = O_1 - E_1, \qquad V_L = \sum_{j=1}^r V_j$$
+
+$$W_L = \frac{U_L^2}{V_L} \;\overset{H_0}{\sim}\; \chi^2_1 \quad\text{(approximately)}$$
+
+- Because the tables are summed, $U_L$ weighs **every event time equally**.
+- Reference distribution: $\chi^2$ with 1 d.f. (two groups). Large $W_L$ gives a small p-value.
+- Needs a reasonable number of events; with few events the approximation is poor.
+- Equivalent to the score test in a Cox model with a binary covariate (next lecture).
+
+# Worked example by hand
+
+## A small data set
+
+Twelve patients, two groups (A and B), time in months (`+` = censored).
+
+```{r}
+x <- data.frame(
+  time   = c(6, 7, 10, 15, 19, 25,   8, 12, 20, 24, 30, 33),
+  status = c(1, 0,  1,  1,  0,  1,   1,  1,  0,  1,  1,  0),
+  g      = rep(c("A", "B"), each = 6)
+)
+with(x, Surv(time, status)) |> format() |> matrix(nrow = 2, byrow = TRUE, dimnames = list(c("A", "B"), NULL))
+```
+
+Build the table: for each distinct **event** time, count the risk sets.
+
+## Computing the 2 x 2 tables in R
+
+```{r}
+tab <- x |>
+  filter(status == 1) |>
+  distinct(time) |> arrange(time) |> pull(time) |>
+  map_df(\(t) {
+    n1 <- sum(x$time >= t & x$g == "A"); n2 <- sum(x$time >= t & x$g == "B")
+    d1 <- sum(x$time == t & x$status == 1 & x$g == "A")
+    d2 <- sum(x$time == t & x$status == 1 & x$g == "B")
+    tibble(time = t, n1, n2, d1, d2, n = n1 + n2, d = d1 + d2,
+           E1 = d * n1 / n, V = n1 * n2 * d * (n - d) / (n^2 * (n - 1)))
+  })
+tab |> mutate(across(c(E1, V), \(z) round(z, 3)))
+```
+
+## Putting it together
+
+```{r}
+O1 <- sum(tab$d1); E1 <- sum(tab$E1); V <- sum(tab$V)
+c(O1 = O1, E1 = round(E1, 2), U = round(O1 - E1, 2), V = round(V, 2))
+W <- (O1 - E1)^2 / V
+c(W = round(W, 3), p = round(pchisq(W, df = 1, lower.tail = FALSE), 3))
+```
+
+. . .
+
+Verification with `survdiff()`:
+
+```{r}
+survdiff(Surv(time, status) ~ g, data = x)
+```
+
+Group A: observed `r O1`, expected `r round(E1, 2)`; $W_L = `r round(W, 2)`$, p = `r round(pchisq(W, 1, lower.tail = FALSE), 2)`. The numbers agree. With twelve patients there is little power, and group A has more events than expected, but the evidence is weak.
+
+# The log-rank test in R
+
+## `survdiff()`: HPA staining in breast cancer
+
+```{r}
+lr <- survdiff(Surv(time, status) ~ stain, data = breast)
+lr
+```
+
+Reading the output:
+
+- `Observed`: events in each group; `Expected`: under $H_0$ (sum of $E_{gj}$).
+- `(O-E)^2/V` column and `Chisq` = $W_L$ = `r round(lr$chisq, 2)` on 1 d.f.
+- Positive staining: `r lr$obs[2]` events vs `r round(lr$exp[2], 1)` expected; negative: `r lr$obs[1]` vs `r round(lr$exp[1], 1)`.
+- p = `r round(lr$pvalue, 3)`: weak-to-moderate evidence of a difference; conventionally just above 5%. n = 45 is small.
+
+::: {.callout-note}
+The column `(O-E)^2/E` is only descriptive; the test is the `(O-E)^2/V` version.
+:::
+
+## Getting the p-value from the object
+
+```{r}
+names(lr)
+pchisq(lr$chisq, df = length(lr$n) - 1, lower.tail = FALSE)
+```
+
+`lr$obs`, `lr$exp`, `lr$var`, `lr$chisq`; the p-value is not stored by name in all versions, so compute it from `chisq` as above if needed.
+
+## Adding the p-value to the plot
+
+```{r}
+#| fig-height: 4.6
+survfit2(Surv(time, status) ~ stain, data = breast) |>
+  ggsurvfit() + add_censor_mark() +
+  add_pvalue("annotation") +
+  add_risktable() +
+  labs(x = "Time (months)", y = "Survival probability") +
+  scale_y_continuous(limits = c(0, 1))
+```
+
+`add_pvalue()` uses the log-rank test by default (a `survdiff()` call is run internally).
+
+## Example: chronic active hepatitis
+
+Two treatments (coded 1 and 2), 22 patients each.
+
+```{r}
+#| fig-height: 3.8
+#| output-location: column
+survfit2(Surv(time, status) ~ treatment, data = hepat) |>
+  ggsurvfit() + add_censor_mark() +
+  labs(x = "Time", y = "Survival probability") +
+  scale_y_continuous(limits = c(0, 1))
+```
+
+```{r}
+lh <- survdiff(Surv(time, status) ~ treatment, data = hepat)
+lh
+```
+
+Group 1 has `r lh$obs[1]` events vs `r round(lh$exp[1], 1)` expected, group 2 has `r lh$obs[2]` vs `r round(lh$exp[2], 1)`. $W_L = `r round(lh$chisq, 2)`$, p = `r round(lh$pvalue, 3)`. Evidence of a difference at the 5% level, with curves that do not cross.
+
+## Example: prostate cancer and ovarian cancer
+
+::: {.columns}
+::: {.column width="50%"}
+**Prostate cancer** (n = 38, two treatments)
+
+```{r}
+survdiff(Surv(time, status) ~ treatment, data = prostate)
+```
+:::
+::: {.column width="50%"}
+**Ovarian cancer** (n = 26, two chemotherapies)
+
+```{r}
+survdiff(Surv(time, status) ~ treat, data = ovar)
+```
+:::
+:::
+
+- Prostate: only `r sum(prostate$status)` events in total. The p-value (`r round(survdiff(Surv(time, status) ~ treatment, data = prostate)$pvalue, 2)`) rests on very few events: fragile, and the $\chi^2$ approximation is questionable.
+- Ovarian: `r sum(ovar$status)` events, no evidence of a difference (p = `r round(survdiff(Surv(time, status) ~ treat, data = ovar)$pvalue, 2)`). That is **not** evidence of no difference: the study is small, and "absence of evidence is not evidence of absence".
+
+## Example: lung cancer, sex (built-in `lung`)
+
+```{r}
+#| fig-height: 3.6
+#| output-location: column
+survfit2(Surv(time, status) ~ sex, data = lung) |>
+  ggsurvfit() +
+  add_pvalue("annotation") +
+  labs(x = "Days", y = "Survival probability") +
+  scale_y_continuous(limits = c(0, 1))
+```
+
+```{r}
+survdiff(Surv(time, status) ~ sex, data = lung)
+```
+
+::: {.callout-note}
+In `lung`, `status` is coded 1 = censored, 2 = dead; `Surv()` accepts this 1/2 coding. `sex`: 1 = male, 2 = female. Males have more deaths than expected.
+:::
+
+# Weighted tests
+
+## Generalising: weights
+
+Give each event time a weight $w_j$:
+
+$$U_w = \sum_j w_j (d_{1j} - E_{1j}), \qquad V_w = \sum_j w_j^2 V_j, \qquad W = \frac{U_w^2}{V_w} \sim \chi^2_1$$
+
+| Test | Weight $w_j$ | Emphasis |
+|---|---|---|
+| Log-rank | $1$ | all event times equally |
+| Wilcoxon (Breslow, Gehan) | $n_j$ | early times (many at risk) |
+| Peto–Peto | $\tilde S(t_{(j)})$, a modified KM estimate | early times, less sensitive to censoring |
+
+Weights must be fixed **before** looking at the data, and must not depend on the group.
+
+## The Fleming–Harrington family
+
+$$w(t) = \hat S(t-)^{\rho}\,\bigl(1 - \hat S(t-)\bigr)^{\gamma}$$
+
+the $G(\rho, \gamma)$ family, with $\hat S$ the pooled KM estimate.
+
+| $(\rho,\gamma)$ | Test | Emphasis |
+|---|---|---|
+| $(0, 0)$ | log-rank | uniform |
+| $(1, 0)$ | Peto–Peto (close to Wilcoxon) | early differences |
+| $(0, 1)$ | | late differences |
+| $(1, 1)$ | | middle |
+
+- Unifying idea: one test, different weights. The choice of $(\rho,\gamma)$ determines **which alternatives** have power.
+- `survdiff(..., rho = )` implements $G(\rho, 0)$ only. For $\gamma > 0$ use e.g. `FHtest` or `nph` packages (not covered here).
+
+## Wilcoxon and Peto–Peto in R
+
+`survdiff()` has no direct Wilcoxon (Gehan–Breslow, $w_j = n_j$) option. `rho = 1` gives $w = \hat S(t-)$, which is the Peto–Peto-type test (Collett: Peto–Peto uses a modified estimate; practically similar).
+
+```{r}
+lr0 <- survdiff(Surv(time, status) ~ stain, data = breast, rho = 0)
+lr1 <- survdiff(Surv(time, status) ~ stain, data = breast, rho = 1)
+tibble(test = c("Log-rank (rho = 0)", "Peto-Peto type (rho = 1)"),
+       chisq = c(lr0$chisq, lr1$chisq),
+       p = pchisq(c(lr0$chisq, lr1$chisq), 1, lower.tail = FALSE)) |>
+  mutate(across(where(is.numeric), \(z) round(z, 3)))
+```
+
+Breast cancer data: the two tests give similar conclusions here (log-rank p = `r round(lr0$pvalue, 3)`, rho = 1 p = `r round(pchisq(lr1$chisq, 1, lower.tail = FALSE), 3)`).
+
+::: {.callout-important}
+## Pre-specify the test
+
+Trying several weights and reporting the smallest p-value inflates the type I error. State the primary test, and $(\rho, \gamma)$ if not the log-rank, in the analysis plan.
+:::
+
+# Which test?
+
+## Rules of thumb
+
+- **Proportional hazards** ($h_1(t) = \psi h_2(t)$ with constant $\psi$): the log-rank test is the most powerful of the family (it is the score test for PH).
+- **Differences mainly early** (hazards converge later): Wilcoxon / Peto–Peto have more power.
+- **Differences mainly late**: $G(0,1)$-type weights.
+- **Crossing curves**: all tests lose power since early and late contributions to $O - E$ cancel.
+- Censoring heavy in one group: Gehan–Breslow weights ($n_j$) depend on the censoring distribution and can be misleading; Peto–Peto is better.
+
+. . .
+
+Look at the curves and think about the mechanism **before** choosing, then pre-specify.
+
+## Example: gastric cancer, crossing curves
+
+```{r}
+#| fig-height: 4.2
+survfit2(Surv(time, status) ~ treat, data = gastric) |>
+  ggsurvfit() +
+  labs(x = "Days", y = "Survival probability") +
+  scale_y_continuous(limits = c(0, 1))
+```
+
+Collett's data: `r sum(gastric$treat == "Chemotherapy")` patients per group, two treatments (Chemotherapy vs Chemo + radiation). The curves cross.
+
+## Gastric cancer: the tests
+
+```{r}
+g0 <- survdiff(Surv(time, status) ~ treat, data = gastric)
+g1 <- survdiff(Surv(time, status) ~ treat, data = gastric, rho = 1)
+```
+
+- Log-rank: $W_L = `r round(g0$chisq, 2)`$, p = `r round(g0$pvalue, 2)`.
+- Peto–Peto type ($\rho = 1$): $W = `r round(g1$chisq, 2)`$, p = `r round(g1$pvalue, 3)`.
+
+. . .
+
+Interpretation: the log-rank test sees almost nothing, because early events favour one group and later events the other, so $O - E$ nearly cancels. The weighted test, which stresses the early period, gives a smaller p-value (borderline).
+
+::: {.callout-warning}
+Choosing $\rho = 1$ **after** seeing these curves is data-driven. The correct conclusion is that the groups have **non-proportional** hazards and a single p-value or a single hazard ratio is a poor summary. Describe the curves, and consider survival at fixed times or restricted mean survival time.
+:::
+
+## Illustration: why test choice matters
+
+Simulation: 60 patients per group, administrative censoring at $t = 3$, 500 replicates. Event times are Weibull. Scenarios:
+
+1. PH: exponential, hazards 1 vs 0.6.
+2. Early difference: hazard 1 in A; in B hazard 0.4 until $t = 0.7$, then 1 (curves then run parallel, no crossing).
+3. Crossing: A exponential with hazard 1; B Weibull with shape 3 and scale 1 (better early, worse late).
+
+```{r}
+#| echo: false
+nsim <- 500; n <- 60; tc <- 3
+scen <- list(
+  "PH"         = \(n) list(a = rexp(n, 1), b = rexp(n, 0.6)),
+  "Early diff" = \(n) list(a = rexp(n, 1), b = {e <- rexp(n); ifelse(e < 0.28, e / 0.4, 0.7 + (e - 0.28))}),
+  "Crossing"   = \(n) list(a = rexp(n, 1), b = rweibull(n, 3, 1))
+)
+power1 <- function(f, rho) {
+  mean(replicate(nsim, {
+    s <- f(n)
+    dat <- data.frame(t = c(s$a, s$b), g = rep(0:1, each = n))
+    dat$st <- as.numeric(dat$t <= tc); dat$t <- pmin(dat$t, tc)
+    survdiff(Surv(t, st) ~ g, data = dat, rho = rho)$chisq > qchisq(0.95, 1)
+  }))
+}
+res <- map_df(names(scen), \(s) tibble(scenario = s, lr = power1(scen[[s]], 0),
+                                       pt = power1(scen[[s]], 1)))
+```
+
+```{r}
+#| echo: false
+#| fig-height: 3
+tt <- seq(0, 3, 0.01)
+sc <- bind_rows(
+  tibble(t = tt, A = exp(-t), B = exp(-0.6 * t), scenario = "PH"),
+  tibble(t = tt, A = exp(-t), B = exp(-ifelse(t < 0.7, 0.4 * t, 0.28 + (t - 0.7))), scenario = "Early diff"),
+  tibble(t = tt, A = exp(-t), B = exp(-t^3), scenario = "Crossing")
+) |> pivot_longer(c(A, B), names_to = "group", values_to = "S") |>
+  mutate(scenario = factor(scenario, levels = c("PH", "Early diff", "Crossing")))
+ggplot(sc, aes(t, S, colour = group)) + geom_line(linewidth = 1) +
+  facet_wrap(~scenario) + labs(x = "Time", y = "S(t)", colour = "Group")
+```
+
+## Simulation results: empirical power
+
+```{r}
+#| echo: false
+res |> rename("Log-rank" = lr, "rho = 1" = pt) |> knitr::kable()
+```
+
+- Under PH the log-rank test is the more powerful (`r res$lr[1]` vs `r res$pt[1]`), as theory says.
+- With an early-only difference the $\rho = 1$ test is expected to do better (`r res$pt[2]` vs `r res$lr[2]`).
+- With crossing curves, compare the two columns: a test that weights early times can detect or miss the difference depending on where the larger part of the difference lies. No single test is good for every pattern, hence pre-specification.
+
+(Random seeds, so exact numbers change a little between renders.)
+
+# More than two groups
+
+## $k$ groups
+
+$H_0: S_1(t) = \dots = S_k(t)$. Compute $O_g - E_g$ for $g = 1, \dots, k$ (they sum to 0), and a quadratic form with their covariance matrix:
+
+$$W = \mathbf{U}^\top \mathbf{V}^{-1} \mathbf{U} \sim \chi^2_{k-1}$$
+
+(use $k - 1$ of the groups). `survdiff()` does this automatically.
+
+```{r}
+survdiff(Surv(time, status) ~ celltype, data = veteran)
+```
+
+Veteran lung cancer data: four cell types, $\chi^2$ on 3 d.f. gives $W = `r round(survdiff(Surv(time, status) ~ celltype, data = veteran)$chisq, 1)`$, p = `r signif(survdiff(Surv(time, status) ~ celltype, data = veteran)$pvalue, 2)`.
+
+. . .
+
+A significant omnibus test says only that **some** groups differ. Follow up with pairwise comparisons (adjust for multiplicity, e.g. Bonferroni/Holm) and describe differences with curves.
+
+## Trend test for ordered groups
+
+If groups are ordered (dose, stage, age group), assign scores $a_g$ and test for a **monotone trend** on 1 d.f.:
+
+$$W_T = \frac{\left(\sum_g a_g (O_g - E_g)\right)^2}{\mathbf a^\top \mathbf V \mathbf a} \sim \chi^2_1$$
+
+More power than the omnibus test if the trend is real. In R: the score test of a numeric covariate in `coxph()` (equal to the log-rank trend test when no ties):
+
+```{r}
+cox_trend <- coxph(Surv(time, status) ~ as.numeric(age), data = hyper)
+omni <- survdiff(Surv(time, status) ~ age, data = hyper)
+c(trend_chisq_1df = unname(cox_trend$score), omnibus_chisq_2df = omni$chisq)
+```
+
+Hypernephroma data, age groups 1 to 3 (n = 36): trend test p = `r round(summary(cox_trend)$sctest["pvalue"], 3)`; omnibus p = `r round(omni$pvalue, 3)`. Scores (1, 2, 3) are an assumption; state them in advance.
+
+# Stratified tests
+
+## Why stratify?
+
+Compare treatments **while accounting for** a confounder or design factor (centre, age group, stage).
+
+Computing $U_{Lk}$, $V_{Lk}$ within each stratum $k = 1, \dots, s$ and then combine:
+
+$$W_S = \frac{\left(\sum_{k=1}^s U_{Lk}\right)^2}{\sum_{k=1}^s V_{Lk}} \sim \chi^2_1$$
+
+- Comparisons are made only **within** strata: patients are never compared across strata.
+- Assumes the same direction of the treatment effect in all strata (not necessarily the same size).
+- Different baseline hazards per stratum are allowed.
+- Stratified Wilcoxon / Peto–Peto: same construction.
+
+## Example: melanoma, BCG vs C. parvum, by age group
+
+```{r}
+table(melanoma$age, melanoma$treatment)
+```
+
+Few patients per cell. First separately per stratum, then stratified:
+
+```{r}
+melanoma |> group_split(age) |>
+  map_df(\(d) {
+    s <- survdiff(Surv(time, status) ~ treatment, data = d)
+    tibble(age = d$age[1], n = nrow(d), U = s$obs[1] - s$exp[1], chisq = s$chisq, p = s$pvalue)
+  }) |> mutate(across(where(is.numeric), \(z) round(z, 2)))
+```
+
+## Stratified log-rank in R
+
+```{r}
+sl <- survdiff(Surv(time, status) ~ treatment + strata(age), data = melanoma)
+sl
+```
+
+Stratified $W_S = `r round(sl$chisq, 2)`$ on 1 d.f., p = `r round(sl$pvalue, 2)`. No evidence of a difference between the vaccines after accounting for age group (but only `r sum(melanoma$status)` deaths in `r nrow(melanoma)` patients).
+
+::: {.callout-tip}
+Ordinary vs stratified: stratifying removes **confounding** by the stratifier and, if the stratifier is prognostic, can increase power. With continuous confounders or several of them, move to regression (Cox model, next lecture).
+:::
+
+# Limitations
+
+## What the tests do not do
+
+- They give a **p-value**, no **effect size**: no hazard ratio, no difference in median or survival at 5 years, no confidence interval.
+- A small p-value with a big sample can be clinically trivial; a large p-value with a small sample proves nothing (ovarian cancer example).
+- Cannot adjust for **continuous** or many covariates (stratification only in few categories).
+- Power depends on the (unknown) form of the hazard difference; crossing curves are a problem.
+- Assumes **independent censoring**, same as KM.
+- Association, not causation, for observational data (HPA staining).
+
+. . .
+
+**Solution**: model the hazard directly, with covariates: the **Cox proportional hazards model** (next lecture). Its score test with one binary covariate is the log-rank test, and it also gives the hazard ratio with a confidence interval.
+
+## In-class exercise (10 minutes)
+
+Use the `ovarian` data from `survival` (`?ovarian`: `rx` = treatment 1/2, `resid.ds` = residual disease, `ecog.ps`).
+
+1. Plot KM curves by `rx` with a risk table.
+2. Run the log-rank test of `rx`. State $H_0$, the observed/expected events in each group and the conclusion in one sentence.
+3. Repeat with `rho = 1`. Why must the choice have been made beforehand?
+4. Run the test stratified by `resid.ds`. Does the conclusion change?
+5. Would you trust the p-value with this number of events? What would you also report?
+
+```{r}
+#| eval: false
+survdiff(Surv(futime, fustat) ~ rx, data = ovarian)
+survdiff(Surv(futime, fustat) ~ rx + strata(resid.ds), data = ovarian)
+```
+
+## Take-home messages
+
+- $H_0: S_1(t) = S_2(t)$; the log-rank test sums $O - E$ over all event times using $2 \times 2$ tables and compares $U^2/V$ with $\chi^2_{k-1}$.
+- Weighted versions (Wilcoxon, Peto–Peto, Fleming–Harrington $G(\rho,\gamma)$) shift the focus to early or late differences; **pre-specify** the choice.
+- The log-rank test is best under proportional hazards; **crossing** curves destroy power: always look at the curves.
+- For $> 2$ groups use the omnibus test or, for ordered groups, a trend test; stratify to adjust for a categorical confounder.
+- Tests give p-values, not effect sizes.
+
+**Next lecture**: the Cox regression model (hazard ratios, covariates).
+
+**Reading**: Collett, Chapter 2, Sections 2.6 to 2.9 (comparison of two groups, log-rank, Wilcoxon, Peto–Peto; three or more groups; stratified tests; test for trend). Start on Chapter 3.

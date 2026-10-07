@@ -1,0 +1,608 @@
+---
+title: "Lecture 8: Parametric Regression Models"
+subtitle: "STA310 Survival Analysis · Collett Chapter 5"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+iud <- read.table(file.path(data_dir, "Time to discontinuation of the use of an IUD.dat"), header = TRUE)
+hyper <- read.table(file.path(data_dir, "Treatment of hypernephroma.dat"), header = TRUE)
+hyper$nephrectomy <- factor(hyper$nephrectomy, levels = 0:1, labels = c("No", "Yes"))
+hyper$age <- factor(hyper$age, levels = 1:3, labels = c("<60", "60-70", ">70"))
+ovar <- read.table(file.path(data_dir, "Chemotherapy in ovarian cancer patients.dat"), header = TRUE)
+ovar$treat <- factor(ovar$treat, levels = 1:2, labels = c("Single", "Combined"))
+ovar$rdisease <- factor(ovar$rdisease, levels = 1:2, labels = c("Incomplete", "Complete"))
+ovar$perf <- factor(ovar$perf, levels = 1:2, labels = c("Good", "Poor"))
+lung2 <- lung |> mutate(dead = status - 1, sex = factor(sex, 1:2, c("Male", "Female")))
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. Why parametric models?
+2. Distributions: exponential, Weibull, log-logistic, log-normal
+3. Likelihood with censoring
+4. PH and AFT parametrizations
+5. Fitting in R: `survreg` and `flexsurvreg`
+6. Choosing a distribution
+7. Predictions and extrapolation
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+You can
+
+- write the likelihood of a parametric model with censoring
+- interpret Weibull coefficients as hazard ratios and as time ratios
+- fit and compare models in R, and predict survival, median and mean
+- explain the risks of extrapolation
+:::
+:::
+
+## Recap and motivation
+
+- Lectures 2-3: Kaplan-Meier, log-rank: no model for $S(t)$.
+- Lectures 4-5: Cox model $h(t \mid x) = h_0(t)\exp(\beta' x)$, $h_0(t)$ left **unspecified**; Lectures 6-7: model checking for Cox.
+
+**Today**: specify the whole distribution of $T$ with a few parameters.
+
+. . .
+
+::: {.callout-note}
+Same data, same questions (effect of treatment, prognosis). A new trade-off: **more information and precision if the model is right, bias if it is wrong**.
+:::
+
+# Why parametric?
+
+## What do we gain?
+
+- **Full distribution**: $S(t)$, $h(t)$, quantiles and mean for any covariate profile
+- **Smooth** hazard and survival curves (KM and Cox baseline are step functions)
+- **Absolute risks and predictions**: e.g. "5-year survival for a 70-year-old with complete residual disease"
+- **Extrapolation** beyond follow-up (e.g. cost-effectiveness analyses), with caution
+- **Efficiency**: smaller standard errors when the model is correct
+- Useful in **small samples** where the Cox partial likelihood discards information
+- Direct **time-scale** interpretation (AFT): "survival is prolonged by a factor ..."
+
+. . .
+
+::: {.callout-warning}
+**Cost**: we assume a distributional form. Wrong form gives biased estimates, and extrapolation is entirely model-driven.
+:::
+
+## Recap of relations
+
+$$S(t) = P(T > t), \quad h(t) = \frac{f(t)}{S(t)}, \quad H(t) = \int_0^t h(u)\,du = -\log S(t)$$
+
+$$f(t) = h(t) S(t), \qquad S(t) = \exp\{-H(t)\}$$
+
+A parametric model = a choice of $h(t;\theta)$ (equivalently $S$ or $f$) with a small parameter vector $\theta$.
+
+# Distributions
+
+## Exponential: constant hazard
+
+$$h(t) = \lambda, \qquad S(t) = e^{-\lambda t}, \qquad \text{median} = \frac{\log 2}{\lambda}, \qquad E(T) = \frac{1}{\lambda}$$
+
+- "No memory": the risk does not depend on time already survived
+- One parameter. Rarely realistic for a whole disease course, but a useful reference
+- Both PH and AFT
+
+## Weibull: monotone hazard
+
+$$h(t) = \lambda\gamma t^{\gamma-1}, \qquad S(t) = \exp(-\lambda t^{\gamma})$$
+
+- Shape $\gamma$: $\gamma < 1$ decreasing hazard, $\gamma = 1$ exponential, $\gamma > 1$ increasing
+- Hazard is always monotone
+- The Weibull (including the exponential) is the only family that is both PH and AFT
+- Median: $\{\log 2/\lambda\}^{1/\gamma}$
+
+. . .
+
+Medical interpretation: $\gamma > 1$ e.g. ageing, wear (IUD, graft failure); $\gamma < 1$ e.g. early post-operative risk that declines.
+
+## Log-logistic and log-normal: non-monotone hazards
+
+**Log-logistic**: $S(t) = \dfrac{1}{1 + \theta t^{\kappa}}$, $h(t) = \dfrac{\theta\kappa t^{\kappa-1}}{1+\theta t^\kappa}$
+
+- $\kappa \le 1$: decreasing hazard; $\kappa > 1$: rises to a peak, then falls
+- Closed-form $S(t)$ (convenient); AFT, and proportional **odds** model
+
+**Log-normal**: $\log T \sim N(\mu, \sigma^2)$, $S(t) = 1 - \Phi\{(\log t - \mu)/\sigma\}$ (with covariates, $\mu$ is replaced by $\eta = \beta'x$)
+
+- Hazard rises then falls to 0 (slowly)
+- AFT only, no closed-form $S(t)$
+
+Typical uses: risk peaks after some time, e.g. after surgery or at the start of an infection; cancer relapse.
+
+## Gompertz: exponentially changing hazard
+
+$$h(t) = \exp(\alpha + \xi t)$$
+
+- Log hazard linear in time; $\xi > 0$ increasing hazard
+- Standard for **adult human mortality** (actuarial science, demography)
+- PH model (Collett 5.8). Available as `dist = "gompertz"` in `flexsurv`
+
+Other families (generalized gamma, inverse Gaussian) exist; we skip them.
+
+## Hazard shapes
+
+```{r}
+#| echo: false
+#| fig-height: 4.6
+tt <- seq(0.01, 4, length.out = 300)
+hz <- bind_rows(
+  tibble(t = tt, h = 1, d = "Exponential"),
+  tibble(t = tt, h = 1.5 * tt^0.5, d = "Weibull, shape 1.5"),
+  tibble(t = tt, h = 0.7 * tt^(-0.3), d = "Weibull, shape 0.7"),
+  tibble(t = tt, h = flexsurv::hlnorm(tt, 0.3, 0.6), d = "Log-normal"),
+  tibble(t = tt, h = flexsurv::hllogis(tt, shape = 2.5, scale = 1.5), d = "Log-logistic, shape 2.5"),
+  tibble(t = tt, h = flexsurv::hgompertz(tt, shape = 0.8, rate = 0.1), d = "Gompertz")
+)
+ggplot(hz, aes(t, h, colour = d)) + geom_line(linewidth = 1.2) +
+  coord_cartesian(ylim = c(0, 3)) +
+  labs(x = "Time", y = "h(t)", colour = NULL)
+```
+
+## Comparison of distributions
+
+| Distribution | Hazard shape | PH | AFT | Typical use |
+|---|---|---|---|---|
+| Exponential | constant | yes | yes | reference; short follow-up, stable risk |
+| Weibull | monotone up or down | yes | yes | default first choice; wear-out, early risk |
+| Log-logistic | up then down (or decreasing) | no (PO) | yes | peaked risk, closed-form $S$ |
+| Log-normal | up then down | no | yes | peaked risk, e.g. incubation times |
+| Gompertz | exponential up or down | yes | no | adult mortality |
+| Cox (for contrast) | unspecified | yes | no | default when shape is unimportant |
+
+# Likelihood with censoring
+
+## Maximum likelihood for censored data
+
+Data $(t_i, \delta_i)$, $i=1,\dots,n$, independent censoring, parameters $\theta$:
+
+$$L(\theta) = \prod_{i=1}^n f(t_i;\theta)^{\delta_i}\, S(t_i;\theta)^{1-\delta_i}
+= \prod_{i=1}^n h(t_i;\theta)^{\delta_i}\, S(t_i;\theta)$$
+
+- Event at $t_i$: the density $f(t_i)$, the "probability" of failing at exactly $t_i$
+- Right-censored at $t_i$: $S(t_i)$, we only know $T > t_i$
+- Log-likelihood: $\ell(\theta) = \sum_i \{\delta_i \log h(t_i) - H(t_i)\}$
+
+Standard errors from the observed information; Wald, score or likelihood-ratio tests. With covariates, $\theta$ includes $\beta$.
+
+## Example: exponential, by hand
+
+With $h = \lambda$: $\ell(\lambda) = d\log\lambda - \lambda\sum_i t_i$, where $d = \sum\delta_i$ = number of events. So
+
+$$\hat\lambda = \frac{d}{\sum t_i} = \frac{\text{events}}{\text{total time at risk}}$$
+
+```{r}
+lam <- sum(iud$status) / sum(iud$time)
+c(events = sum(iud$status), time_at_risk = sum(iud$time), lambda_hat = lam,
+  se = lam / sqrt(sum(iud$status)))
+```
+
+For the IUD data: `r sum(iud$status)` discontinuations in `r sum(iud$time)` woman-weeks, so $\hat\lambda =$ `r round(lam, 4)` per week; median `r round(log(2)/lam, 1)` weeks.
+
+# Two parametrizations
+
+## Proportional hazards form
+
+$$h(t \mid x) = h_0(t)\exp(\beta' x)$$
+
+Same as Cox, but $h_0(t)$ is **parametric**, e.g. Weibull: $h_0(t) = \lambda\gamma t^{\gamma-1}$.
+
+- $\exp(\beta_j)$ = hazard ratio
+- Weibull: $h(t \mid x) = \lambda e^{\beta'x}\gamma t^{\gamma-1}$, still Weibull with the same $\gamma$
+
+## Accelerated failure time (AFT) form
+
+$$\log T = \eta + \sigma W, \qquad \eta = \beta' x = \beta_0 + \beta_1 x_1 + \dots + \beta_p x_p$$
+
+$W$ = error with a fixed distribution (extreme value for Weibull, logistic for log-logistic, normal for log-normal). Equivalent: $S(t \mid x) = S_0\{t\, e^{-\beta' x}\}$.
+
+- $T = \exp(\eta)\cdot e^{\sigma W}$: covariates **rescale time**
+- $\exp(\beta_j)$ = **time ratio** (acceleration factor): survival time is **multiplied by $\exp(\beta_j)$** per unit of $x_j$
+- $\exp(\beta_j) > 1$: longer survival (beneficial); $< 1$: shorter
+- Quantiles (median, ...) scale by the same factor
+
+. . .
+
+::: {.callout-note}
+Sign conventions differ: in PH a positive coefficient is **harmful**; in AFT it is **beneficial**.
+:::
+
+## Weibull: PH and AFT coincide
+
+Weibull with AFT form, $W$ standard minimum extreme value, scale $\sigma = 1/\gamma$:
+
+$$\beta_j^{PH} = -\frac{\beta_j^{AFT}}{\sigma} = -\gamma\,\beta_j^{AFT}$$
+
+$$\text{HR} = \exp(\beta^{PH}) = (\text{TR})^{-\gamma}$$
+
+Example: $\sigma = 0.5$ ($\gamma = 2$), time ratio 1.5 gives HR $= 1.5^{-2} = 0.44$.
+
+. . .
+
+- If $\gamma$ is large (hazard strongly increasing), a modest time ratio means a large hazard ratio
+- For log-logistic and log-normal there is **no** such HR; only time ratios (or odds ratios for log-logistic)
+
+## Illustration: an AFT effect shifts the curve along the time axis
+
+```{r}
+#| echo: false
+#| fig-height: 4.4
+tt <- seq(0, 10, length.out = 300)
+tibble(t = rep(tt, 2), S = c(pweibull(tt, 1.5, 4, lower.tail = FALSE),
+                              pweibull(tt, 1.5, 4 * 1.5, lower.tail = FALSE)),
+       g = rep(c("Reference", "Time ratio 1.5"), each = length(tt))) |>
+  ggplot(aes(t, S, colour = g)) + geom_line(linewidth = 1.2) +
+  labs(x = "Time", y = "S(t)", colour = NULL)
+```
+
+The treated curve is the reference curve stretched horizontally by 1.5: all percentiles are 1.5 times longer.
+
+# Fitting in R
+
+## Example 1: IUD data, no covariates
+
+```{r}
+fit_w <- survreg(Surv(time, status) ~ 1, data = iud, dist = "weibull")
+fit_e <- survreg(Surv(time, status) ~ 1, data = iud, dist = "exponential")
+c(intercept = coef(fit_w), scale = fit_w$scale, shape = 1 / fit_w$scale)
+```
+
+`survreg` parametrization: $\log T = \eta + \sigma W$ with $\eta = \beta_0$ (the `(Intercept)`) when there are no covariates, and `scale` $=\sigma$.
+
+::: {.callout-important}
+Weibull shape (Collett's $\gamma$) $= 1/$`scale`. And Collett's $\lambda = \exp(-\text{Intercept}/\sigma)$. Do not read `survreg`'s `Scale` as the shape.
+:::
+
+Here shape $=$ `r round(1 / fit_w$scale, 2)`, suggestive of an increasing hazard of discontinuation.
+
+## `flexsurvreg`: hazard-scale parameters
+
+```{r}
+fs_w <- flexsurv::flexsurvreg(Surv(time, status) ~ 1, data = iud, dist = "weibull")
+fs_w
+```
+
+`flexsurvreg` reports **shape** and **scale** directly (`scale` $= \lambda^{-1/\gamma}$, the time at which $S = e^{-1}$). `dist = "weibullPH"` gives the PH parametrization with $\lambda$ as in the book.
+
+## Fitted curve against Kaplan-Meier
+
+```{r}
+#| fig-height: 4.4
+plot(fs_w, xlab = "Weeks", ylab = "Probability of continued IUD use")
+```
+
+The smooth Weibull curve (red) with 95% band follows the KM steps (black). With only `r nrow(iud)` women, KM's right tail is very uncertain.
+
+## Exponential or Weibull? Nested models
+
+The exponential is a Weibull with $\gamma = 1$. Likelihood ratio test:
+
+```{r}
+fs_e <- flexsurv::flexsurvreg(Surv(time, status) ~ 1, data = iud, dist = "exp")
+lr <- 2 * (fs_w$loglik - fs_e$loglik)
+c(LR = lr, p = pchisq(lr, df = 1, lower.tail = FALSE),
+  AIC_exp = AIC(fs_e), AIC_weibull = AIC(fs_w))
+```
+
+LR statistic `r round(lr, 2)` on 1 df, p = `r round(pchisq(lr, 1, lower.tail = FALSE), 3)`. AIC favours `r if (AIC(fs_w) < AIC(fs_e)) "the Weibull" else "the exponential"`. With `r sum(iud$status)` events the evidence is limited either way.
+
+## Example 2: hypernephroma, nephrectomy and age
+
+`r nrow(hyper)` patients; `nephrectomy` (No/Yes), age group ($<60$, 60-70, $>70$), time and status.
+
+```{r}
+hyper |> count(nephrectomy, age) |> pivot_wider(names_from = age, values_from = n)
+hyper |> summarise(events = sum(status), n = n(), median_time = median(time))
+```
+
+Question: does nephrectomy prolong survival, after allowing for age group?
+
+## Weibull AFT for the hypernephroma data
+
+```{r}
+h_fit <- survreg(Surv(time, status) ~ nephrectomy + age, data = hyper, dist = "weibull")
+summary(h_fit)$table
+```
+
+Interpretation (time ratios):
+
+```{r}
+tr <- exp(cbind(TR = coef(h_fit), confint(h_fit)))[-1, ]
+round(tr, 2)
+```
+
+Nephrectomy: time ratio `r round(tr[1,1], 2)` (95% CI `r round(tr[1,2], 2)` to `r round(tr[1,3], 2)`): survival times are estimated to be multiplied by about `r round(tr[1,1], 1)`. Check how wide the interval is: with `r nrow(hyper)` patients, precision is low.
+
+## Same model, PH parametrization and hazard ratios
+
+```{r}
+h_ph <- flexsurv::flexsurvreg(Surv(time, status) ~ nephrectomy + age, data = hyper, dist = "weibullPH")
+round(exp(h_ph$res[-(1:2), c("est", "L95%", "U95%")]), 2)
+```
+
+These are hazard ratios. Check with the formula: $-\hat\beta^{AFT}/\hat\sigma$ for nephrectomy gives HR $=$ `r round(exp(-coef(h_fit)[2] / h_fit$scale), 2)`, same as above.
+
+## Example 3: ovar cancer
+
+`r nrow(ovar)` women, two chemotherapy regimens (`treat`: Single/Combined), `age`, residual disease (`rdisease`: Incomplete/Complete), performance status (`perf`: Good/Poor).
+
+```{r}
+ov_fit <- survreg(Surv(time, status) ~ treat + age + rdisease + perf,
+                  data = ovar, dist = "weibull")
+broom::tidy(ov_fit, conf.int = TRUE, exponentiate = TRUE) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+(`exponentiate = TRUE` gives time ratios; the `Log(scale)` row is on the log scale.)
+
+## Interpreting the ovar output
+
+```{r}
+tr_o <- exp(coef(ov_fit))
+```
+
+- **Age**: each extra year multiplies survival time by `r round(tr_o["age"], 3)`, i.e. about `r round(100 * (1 - tr_o["age"]), 1)`% shorter per year; per 10 years, time ratio `r round(tr_o["age"]^10, 2)`.
+- **Combined vs single chemotherapy**: time ratio `r round(tr_o["treatCombined"], 2)`; the Wald p-value is `r round(summary(ov_fit)$table["treatCombined", "p"], 2)`, so no firm conclusion about treatment (n = `r nrow(ovar)`, `r sum(ovar$status)` deaths).
+- Scale $\hat\sigma =$ `r round(ov_fit$scale, 2)`, so shape $\hat\gamma =$ `r round(1/ov_fit$scale, 2)`: increasing hazard.
+- Hazard ratio for age per year: $\exp(-\hat\beta/\hat\sigma) =$ `r round(exp(-coef(ov_fit)["age"] / ov_fit$scale), 2)`.
+
+## Example 4: lung cancer, sex
+
+Built-in `lung` data (n = `r nrow(lung)`, survival in days, `status` 2 = dead, recoded to `dead`).
+
+```{r}
+lung_fit <- survreg(Surv(time, dead) ~ sex + age + ph.ecog, data = lung2, dist = "weibull")
+lung_tr <- exp(cbind(TR = coef(lung_fit), confint(lung_fit)))
+round(lung_tr, 3)
+```
+
+Women have a time ratio of `r round(lung_tr["sexFemale", 1], 2)` (95% CI `r round(lung_tr["sexFemale", 2], 2)` to `r round(lung_tr["sexFemale", 3], 2)`) relative to men, adjusting for age and ECOG score: survival times are multiplied by about `r round(lung_tr["sexFemale", 1], 2)`. Each ECOG point multiplies survival time by `r round(lung_tr["ph.ecog", 1], 2)`.
+
+## Other distributions with the same covariates
+
+```{r}
+dists <- c("weibull", "lognormal", "loglogistic", "exponential")
+aics <- map_dfr(dists, \(d) {
+  f <- survreg(Surv(time, dead) ~ sex + age + ph.ecog, data = lung2, dist = d)
+  tibble(dist = d, loglik = f$loglik[2], AIC = AIC(f),
+         TR_female = exp(coef(f)["sexFemale"]))
+})
+aics |> mutate(across(where(is.numeric), \(x) round(x, 2)))
+```
+
+The time ratio for sex is fairly similar across the three AFT families, but not identical. Non-nested families (Weibull vs log-normal) can be compared by AIC, not by LR test.
+
+# Choosing a distribution
+
+## Graphical check: Weibull plot
+
+If $T$ is Weibull, $H(t) = \lambda t^\gamma$, so
+
+$$\log H(t) = \log\lambda + \gamma\log t$$
+
+Plot $\log \hat H(t)$ (or $\log\{-\log \hat S(t)\}$ from KM) against $\log t$: roughly a **straight line** with slope $\gamma$. Slope 1 and intercept $\log\lambda$ means exponential. Parallel lines for groups: PH.
+
+```{r}
+#| fig-height: 3.8
+km <- survfit(Surv(time, dead) ~ sex, data = lung2)
+tibble(time = km$time, S = km$surv, sex = rep(names(km$strata), km$strata)) |>
+  filter(S > 0, S < 1) |>
+  ggplot(aes(log(time), log(-log(S)), colour = sex)) + geom_step() +
+  labs(x = "log(time)", y = "log cumulative hazard", colour = NULL)
+```
+
+## Reading the Weibull plot
+
+- Lines are roughly straight and roughly parallel after the first noisy steps, with slope near the estimated shape `r round(1 / lung_fit$scale, 2)`
+- Curvature suggests log-logistic or log-normal
+- Vertical distance = $\log$ HR; horizontal distance = $\log$ time ratio (same for a Weibull)
+- With few events, the plot is noisy: do not over-interpret
+
+. . .
+
+Formal alternatives: AIC, LR tests for nested models, a more flexible parametric model (Lecture 9), residuals (Lecture 9).
+
+## Comparing to the Kaplan-Meier curve
+
+```{r}
+#| fig-height: 4.4
+nd <- data.frame(sex = c("Male", "Female"), age = 63, ph.ecog = 1) |>
+  mutate(sex = factor(sex, levels = c("Male", "Female")))
+pr <- seq(0, 1000, by = 10)
+sfun <- map_dfr(1:2, \(i) tibble(time = pr, sex = nd$sex[i],
+   S = predict(lung_fit, nd[i, ], type = "quantile", p = seq(0.001, 0.999, length = 999)) |>
+        (\(q) approx(q, 1 - seq(0.001, 0.999, length = 999), pr, rule = 2)$y)()))
+km2 <- survfit2(Surv(time, dead) ~ sex, data = lung2)
+km2 |> ggsurvfit() + labs(x = "Days", y = "Survival probability") +
+  geom_line(data = sfun, aes(time, S, colour = sex), linetype = 2, linewidth = 1, inherit.aes = FALSE)
+```
+
+Dashed = Weibull prediction for a 63-year-old with ECOG 1 (so not identical to the marginal KM; shown to compare shape and level only).
+
+## AIC and LR tests: nested models
+
+For nested parametric models (same family, different covariates; exponential within Weibull):
+
+$$\text{LR} = -2(\ell_{\text{small}} - \ell_{\text{big}}) \sim \chi^2_{q} \text{ (approx.)}$$
+
+```{r}
+f0 <- survreg(Surv(time, dead) ~ sex + age, data = lung2, dist = "weibull")
+f1 <- survreg(Surv(time, dead) ~ sex + age + ph.ecog, data = lung2, dist = "weibull")
+anova(f0, f1)
+```
+
+(Use the same data in both fits: `ph.ecog` has one missing value, which `survreg` drops, so re-fit `f0` on the same rows when comparing.)
+
+## Same rows, please
+
+```{r}
+cc <- lung2 |> drop_na(age, ph.ecog)
+f0 <- survreg(Surv(time, dead) ~ sex + age, data = cc, dist = "weibull")
+f1 <- survreg(Surv(time, dead) ~ sex + age + ph.ecog, data = cc, dist = "weibull")
+anova(f0, f1)
+```
+
+# Parametric versus Cox
+
+## Weibull versus Cox: same data
+
+If the Weibull model is right, the hazard ratios from Weibull PH and Cox should be similar, with the Weibull slightly more precise.
+
+```{r}
+cox_o <- coxph(Surv(time, status) ~ treat + age + rdisease + perf, data = ovar)
+wph_o <- flexsurv::flexsurvreg(Surv(time, status) ~ treat + age + rdisease + perf,
+                               data = ovar, dist = "weibullPH")
+cmp <- tibble(term = names(coef(cox_o)),
+              HR_cox = exp(coef(cox_o)), se_cox = summary(cox_o)$coefficients[, "se(coef)"],
+              HR_weibull = exp(wph_o$res[-(1:2), "est"]), se_weibull = wph_o$res[-(1:2), "se"])
+cmp |> mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+## Interpreting the comparison
+
+- Hazard ratios are of the same order: age HR `r round(cmp$HR_cox[2], 2)` (Cox) and `r round(cmp$HR_weibull[2], 2)` (Weibull)
+- Standard errors are on the log-HR scale in both columns (flexsurv reports the SE of the log-coefficient)
+- Large differences would signal a poor Weibull fit or a non-PH hazard
+- With `r sum(ovar$status)` events the data cannot say much about differences in efficiency
+
+. . .
+
+::: {.callout-tip}
+**Practical advice**: report Cox for the HR when only relative effects matter; use parametric when you need absolute predictions, smooth hazards, or extrapolation. Check the PH/AFT assumption either way.
+:::
+
+## Cox versus Weibull: baseline
+
+```{r}
+#| fig-height: 4.2
+cox_l <- coxph(Surv(time, dead) ~ sex + age + ph.ecog, data = lung2)
+nd1 <- data.frame(sex = factor("Male", levels = c("Male", "Female")), age = 63, ph.ecog = 1)
+sc <- survfit(cox_l, newdata = nd1)
+qs <- seq(0.001, 0.999, length = 999)
+wq <- predict(lung_fit, nd1, type = "quantile", p = qs)
+ggplot() +
+  geom_step(aes(sc$time, sc$surv, colour = "Cox"), linewidth = 1) +
+  geom_line(aes(wq, 1 - qs, colour = "Weibull"), linewidth = 1) +
+  coord_cartesian(xlim = c(0, 1000)) +
+  labs(x = "Days", y = "Survival probability", colour = NULL)
+```
+
+Male, age 63, ECOG 1. The curves are close within the observed range: the Weibull is a smoothed version of the Cox prediction.
+
+# Predictions
+
+## Median, mean and restricted mean from a parametric model
+
+For a covariate profile $x$, with fitted $\hat S(t\mid x)$:
+
+- **Median**: $t$ such that $\hat S(t\mid x) = 0.5$ (any percentile $p$: `predict(type = "quantile")`)
+- **Mean**: $\int_0^\infty \hat S(t)\,dt$, requires extrapolation to infinity
+- **Restricted mean** up to $\tau$: $\int_0^{\tau}\hat S(t)\,dt$, mean time alive within $\tau$
+
+```{r}
+fs_l <- flexsurv::flexsurvreg(Surv(time, dead) ~ sex + age + ph.ecog, data = lung2, dist = "weibull")
+nd2 <- data.frame(sex = c("Male", "Female"), age = 63, ph.ecog = 1) |>
+  mutate(sex = factor(sex, levels = c("Male", "Female")))
+bind_rows(
+  summary(fs_l, newdata = nd2, type = "quantile", quantiles = 0.5, tidy = TRUE) |> mutate(what = "median"),
+  summary(fs_l, newdata = nd2, type = "mean", tidy = TRUE) |> mutate(what = "mean"),
+  summary(fs_l, newdata = nd2, type = "rmst", t = 365, tidy = TRUE) |> mutate(what = "RMST 1 yr")
+) |> select(what, sex, est, lcl, ucl) |> mutate(across(where(is.numeric), \(x) round(x)))
+```
+
+## Interpretation
+
+For a 63-year-old with ECOG 1, the Weibull model estimates a median survival that is longer for women than men, with the mean larger than the median (right-skewed distribution). The restricted mean is the average number of days alive during the first year, and needs far less extrapolation than the mean.
+
+::: {.callout-warning}
+The **mean** depends on the tail of $S(t)$ beyond follow-up, which is pure model assumption. Prefer **median** and **restricted mean** and state $\tau$.
+:::
+
+## Survival probabilities at fixed times
+
+```{r}
+summary(fs_l, newdata = nd2, type = "survival", t = c(180, 365, 730), tidy = TRUE) |>
+  select(time, sex, est, lcl, ucl) |> mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+Absolute risk statements, e.g. "estimated 1-year survival `r round(summary(fs_l, newdata = nd2[2,], type = "survival", t = 365, tidy = TRUE)$est, 2)` for a 63-year-old woman with ECOG 1" follow directly, with confidence intervals.
+
+## Extrapolation: a warning in practice
+
+Experiment: pretend follow-up ended at 300 days (censor everything later), fit models, extrapolate, compare with full KM.
+
+```{r}
+#| echo: false
+#| fig-height: 4.6
+trunc <- lung2 |> mutate(dead2 = ifelse(time > 300, 0, dead), time2 = pmin(time, 300))
+fe <- flexsurv::flexsurvreg(Surv(time2, dead2) ~ 1, data = trunc, dist = "exp")
+fw <- flexsurv::flexsurvreg(Surv(time2, dead2) ~ 1, data = trunc, dist = "weibull")
+fl <- flexsurv::flexsurvreg(Surv(time2, dead2) ~ 1, data = trunc, dist = "lnorm")
+tt <- seq(0, 1000, 10)
+ex <- map_dfr(list(Exponential = fe, Weibull = fw, `Log-normal` = fl), \(f)
+  summary(f, t = tt, tidy = TRUE), .id = "model")
+kmf <- survfit(Surv(time, dead) ~ 1, data = lung2)
+ggplot() +
+  geom_step(aes(kmf$time, kmf$surv), linewidth = 1.1) +
+  geom_line(data = ex, aes(time, est, colour = model), linewidth = 1) +
+  geom_vline(xintercept = 300, linetype = 3) +
+  labs(x = "Days", y = "Survival probability", colour = "Fitted on data up to day 300")
+```
+
+Black: KM using all data. Dotted line: end of "available follow-up". Models that fit equally well within the first 300 days can diverge widely beyond.
+
+## Extrapolation: rules of thumb
+
+- Within-range fit says little about the tail
+- Treat extrapolations as **scenarios**, not estimates; compare several families
+- Use external information (registry, mortality tables) to anchor the tail
+- Report restricted means with the horizon $\tau$ inside the follow-up where possible
+- Prefer flexible models (Lecture 9) to check sensitivity
+
+# Practice
+
+## In-class exercise (10 min)
+
+Ovarian data. Using the Weibull AFT model `ov_fit` (output on the earlier slide):
+
+1. Age has an AFT coefficient of `r round(coef(ov_fit)["age"], 3)` and `Scale` `r round(ov_fit$scale, 2)`. Compute the time ratio for a woman 10 years older, and the corresponding hazard ratio.
+2. Is the sign of the AFT coefficient consistent with the sign of the PH log hazard ratio? Why?
+3. Fit `dist = "exponential"` to the same covariates, and test it against the Weibull with a likelihood ratio test. What do you conclude?
+4. Predict the median survival (days) for a 60-year-old on combined chemotherapy, incomplete residual disease, good performance.
+
+Hint: `predict(fit, newdata, type = "quantile", p = 0.5)`.
+
+## Quiz
+
+1. A Weibull model has `survreg` Scale 0.5. What is the shape and is the hazard increasing or decreasing?
+2. A treatment has a time ratio of 0.7. Is it beneficial?
+3. Which distributions can give a hazard ratio? Which only a time ratio?
+4. Why is the mean survival a risky quantity to report?
+
+## Take-home messages
+
+- Parametric models specify the **whole** distribution: gain absolute predictions, smooth curves, efficiency; cost: assumptions
+- Weibull (monotone hazard) is the workhorse; exponential is a special case; log-logistic and log-normal give peaked hazards
+- Likelihood: $f(t)$ for events, $S(t)$ for censored
+- **AFT**: $\log T = \eta + \sigma W$, $\eta = \beta'x$, $\exp(\beta)$ = time ratio. **PH**: $\exp(\beta)$ = hazard ratio. Weibull: $\beta^{PH} = -\beta^{AFT}/\sigma$
+- `survreg`: shape $= 1/$`scale`; `flexsurvreg`: shape and scale directly, with `summary()` for predictions
+- Choose by Weibull plot, AIC, LR tests; compare with Cox
+- **Do not extrapolate blindly**; prefer median and restricted mean to mean
+
+**Next lecture**: flexible parametric models and model checking for parametric models (Collett, Chapters 6-7).
+
+**Reading**: Collett, Chapter 5 (sections 5.1-5.7 on distributions, likelihood and the Weibull model; 5.10-5.13 on AFT models; skim 5.8, 5.14-5.17).

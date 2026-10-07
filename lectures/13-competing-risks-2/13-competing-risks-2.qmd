@@ -1,0 +1,611 @@
+---
+title: "Lecture 13: Competing Risks II, Regression"
+subtitle: "STA310 Survival Analysis · Collett Chapter 12 (part 2)"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+
+# Same set-up as Lecture 12 (identical object names, labels and reference levels)
+# Liver transplant recipients (Collett Example 12.1)
+liver <- read.table(file.path(data_dir, "Survival of liver transplant recipients.dat"), header = TRUE)
+liver <- liver |>
+  mutate(gender = factor(gender, 1:2, c("Male", "Female")),
+         disease = factor(disease, 1:3, c("PBC", "PSC", "ALD")),
+         disease = relevel(disease, ref = "ALD"),
+         cause = factor(cof, 0:4, c("censored", "rejection", "thrombosis", "recurrent disease", "other")),
+         time_y = time / 365.25)
+
+# MGUS: patients with missing hgb are dropped (as in Lecture 12)
+mgus <- mgus2 |>
+  filter(!is.na(hgb)) |>
+  mutate(etime = ifelse(pstat == 1, ptime, futime),
+         event = factor(case_when(pstat == 1 ~ 1, death == 1 ~ 2, TRUE ~ 0),
+                        levels = 0:2, labels = c("censored", "progression", "death")))
+for (v in names(mgus)) attr(mgus[[v]], "label") <- NULL
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. Recap and two examples
+2. Cause-specific Cox models
+3. The subdistribution hazard and Fine–Gray
+4. Two models, two questions
+5. Predicting cumulative incidence
+6. Checking assumptions, treatment effects, sample size
+7. Exercise and take-home
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+You can
+
+- fit and interpret cause-specific Cox models
+- fit and interpret a Fine–Gray model
+- explain why the two can disagree, and choose
+- predict cumulative incidence for a patient profile
+:::
+:::
+
+## Recap (Lecture 12)
+
+Each subject experiences **one** of $m$ event types $k = 1, \dots, m$ (or is censored). Details and the $1-\text{KM}$ bias are in Lecture 12; what we need here:
+
+- **Cause-specific hazard** $h_k(t)$, cumulative $H_k(t)$, overall survival $S(t) = \exp\{-\sum_k H_k(t)\}$
+- **Cumulative incidence** $\mathrm{CIF}_k(t) = P(T \le t, C = k) = \int_0^t S(u-)\, h_k(u)\, du$ depends on **all** $h_k$, not only on $h_k$
+- Today's question: how do covariates affect the *hazard* of cause $k$, and how do they affect the *probability* $\mathrm{CIF}_k(t)$?
+
+# Two running examples
+
+## Example 1: liver transplant recipients
+
+Collett Example 12.1: $n =$ `r nrow(liver)` adults, first elective liver transplant, time to **graft failure**; causes: rejection, thrombosis, recurrent disease, other. Deaths with a functioning graft are censored in this data set.
+
+```{r}
+liver |> select(patient, age, gender, disease, time, status, cof) |> head(4)
+liver |> count(cause) |> mutate(percent = round(100 * n / sum(n), 1))
+```
+
+Covariates: `age` (years), `gender`, `disease` (PBC, PSC, ALD; reference ALD). Time is in days.
+
+::: {.callout-note}
+We define events from `cof` (0 = censored, 1 to 4 = causes). In the file, `status` and `cof` disagree for `r sum((liver$status > 0) != (liver$cof > 0))` of `r nrow(liver)` patients (`r sum(liver$status > 0 & liver$cof == 0)` with `status` = 1 but `cof` = 0, `r sum(liver$status == 0 & liver$cof > 0)` the reverse); we use `cof`.
+:::
+
+## Example 2: MGUS, progression or death
+
+`mgus2` (Mayo Clinic): `r nrow(mgus2)` patients with monoclonal gammopathy of undetermined significance, a premalignant plasma-cell condition. Event of interest: **progression** to a plasma cell malignancy. **Competing event**: death without progression (common in this elderly cohort).
+
+```{r}
+mgus |> count(event) |> mutate(percent = round(100 * n / sum(n), 1))
+```
+
+Time `etime` in months from diagnosis; covariates `age`, `sex`, `hgb` (haemoglobin, g/dl). `r nrow(mgus2) - nrow(mgus)` patients with missing `hgb` are dropped (same data as in Lecture 12), leaving `r nrow(mgus)`.
+
+::: {.callout-tip}
+We check the coding by inspection: `pstat = 1` is progression (time `ptime`); otherwise follow-up ends at `futime` with `death` 1/0.
+:::
+
+## CIFs for MGUS by sex
+
+Needed to interpret the sex effects below (the in-class exercise of Lecture 12 asks for the same plot).
+
+```{r}
+#| fig-height: 4.3
+tidycmprsk::cuminc(Surv(etime, event) ~ sex, data = mgus) |>
+  ggcuminc(outcome = c("progression", "death")) +
+  add_confidence_interval() +
+  labs(x = "Months since diagnosis", y = "Cumulative incidence") +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| include: false
+ci_sex <- tidycmprsk::tidy(tidycmprsk::cuminc(Surv(etime, event) ~ sex, data = mgus), times = 120)
+cs <- \(o, g) ci_sex |> filter(outcome == o, strata == g) |> pull(estimate)
+```
+
+At 10 years the CIF of death is `r round(cs("death", "M"), 2)` in men and `r round(cs("death", "F"), 2)` in women; for progression it is `r round(cs("progression", "M"), 2)` and `r round(cs("progression", "F"), 2)`.
+
+# Cause-specific Cox models
+
+## Idea: one Cox model per cause
+
+For cause $k$ the hazard for subject $i$ is (Collett Section 12.4)
+
+$$h_{ik}(t) = \exp(\boldsymbol\beta_k^{cs\prime} \mathbf{x}_i)\, h_{0k}(t)$$
+
+**Recipe**: for each cause $k$ in turn
+
+1. event = cause $k$
+2. everyone who has a **competing** event is **censored** at that time
+3. fit `coxph()` as usual
+
+. . .
+
+- Separate $\boldsymbol\beta_k^{cs}$ and baseline $h_{0k}$ for each cause
+- Standard software, standard PH checks, time-dependent covariates all work
+- Hazard ratio: effect on the **rate of cause $k$ among those still event-free** (alive, no event of any type so far)
+
+## Cause-specific Cox in R: MGUS
+
+```{r}
+cs_prog <- coxph(Surv(etime, event == "progression") ~ age + sex + hgb, data = mgus)
+cs_death <- coxph(Surv(etime, event == "death") ~ age + sex + hgb, data = mgus)
+```
+
+```{r}
+#| output-location: column
+library(gtsummary)
+tbl_merge(
+  list(tbl_regression(cs_prog, exponentiate = TRUE),
+       tbl_regression(cs_death, exponentiate = TRUE)),
+  tab_spanner = c("**Progression**", "**Death**")
+)
+```
+
+## Interpreting the MGUS cause-specific models
+
+```{r}
+#| include: false
+cp <- exp(coef(cs_prog)); cd <- exp(coef(cs_death))
+pp <- summary(cs_prog)$coefficients[, "Pr(>|z|)"]
+pd <- summary(cs_death)$coefficients[, "Pr(>|z|)"]
+fp <- \(x) ifelse(x < 0.001, "< 0.001", paste("=", round(x, 3)))
+```
+
+- **Progression**: each g/dl higher haemoglobin changes the progression hazard by a factor `r round(cp["hgb"], 2)` (p = `r round(pp["hgb"], 3)`), among patients alive and progression-free. Age: HR `r round(cp["age"], 2)` per year (p = `r round(pp["age"], 3)`); men vs women: HR `r round(cp["sexM"], 2)` (p = `r round(pp["sexM"], 3)`).
+- **Death**: HR `r round(cd["age"], 2)` per year of age (`r round(cd["age"]^10, 1)` per 10 years, p `r fp(pd["age"])`), men `r round(cd["sexM"], 2)` times the death rate of women (p `r fp(pd["sexM"])`), haemoglobin HR `r round(cd["hgb"], 2)` per g/dl (p `r fp(pd["hgb"])`).
+
+. . .
+
+Read together: compare the age HR for death with that for progression above (sizes and p-values); both models are needed to understand the disease course.
+
+## Liver data: four cause-specific models
+
+```{r}
+causes <- c("rejection", "thrombosis", "recurrent disease", "other")
+cs_liver <- map(causes, \(k) coxph(Surv(time, cause == k) ~ age + gender + disease, data = liver)) |>
+  set_names(causes)
+map_dfr(cs_liver, broom::tidy, exponentiate = TRUE, conf.int = TRUE, .id = "cause") |>
+  filter(term != "age") |>
+  transmute(cause, term, HR = round(estimate, 2),
+            CI = str_c(round(conf.low, 2), " to ", round(conf.high, 2)), p = round(p.value, 3))
+```
+
+(Age: see next slide.) Compare Collett Table 12.5 (the liver data and the hazard ratios there are the same).
+
+## Liver: what do these say?
+
+```{r}
+#| include: false
+tl <- map_dfr(cs_liver, broom::tidy, exponentiate = TRUE, conf.int = TRUE, .id = "cause")
+g <- \(k, t) tl |> filter(cause == k, term == t)
+```
+
+- **Thrombosis**: PBC has hazard `r round(g("thrombosis", "diseasePBC")$estimate, 2)` times that of ALD (95% CI `r round(g("thrombosis", "diseasePBC")$conf.low, 2)` to `r round(g("thrombosis", "diseasePBC")$conf.high, 2)`).
+- **Recurrent disease**: PBC HR `r round(g("recurrent disease", "diseasePBC")$estimate, 2)` (CI `r round(g("recurrent disease", "diseasePBC")$conf.low, 2)` to `r round(g("recurrent disease", "diseasePBC")$conf.high, 2)`), i.e. a `r ifelse(g("recurrent disease", "diseasePBC")$estimate < 1, "lower", "higher")` rate than ALD; PSC HR `r round(g("recurrent disease", "diseasePSC")$estimate, 2)`.
+- **Other causes**: age HR `r round(g("other", "age")$estimate, 2)` per year (CI `r round(g("other", "age")$conf.low, 2)` to `r round(g("other", "age")$conf.high, 2)`); the rate of failure from other causes `r ifelse(g("other", "age")$estimate > 1, "increases", "decreases")` with age.
+- **Rejection**: only `r sum(liver$cause == "rejection")` events, so wide intervals.
+
+Different causes have different risk factors: this is the **etiological** insight.
+
+## Cause-specific models: what they do and do not say
+
+::: {.callout-note}
+**Good for**: aetiology ("does X change the biological rate of cause $k$?"), comparing effects across causes, and mechanisms.
+:::
+
+::: {.callout-warning}
+**Limitations**
+
+- Censoring at the competing event relies on **independence** between causes; this cannot be tested from the data (Collett, Section 12.4)
+- $\hat\beta_k^{cs}$ does not tell the effect on the **probability** of cause $k$: $\mathrm{CIF}_k(t)$ depends on all $h_{k'}$
+- A covariate that raises the competing hazard lowers the CIF for cause $k$ while leaving $h_k$ unchanged
+:::
+
+# Subdistribution hazard and Fine–Gray
+
+## The idea: model the CIF directly
+
+Is there a hazard whose Cox-type model maps straight to $\mathrm{CIF}_k(t)$? Define the **subdistribution hazard**
+
+$$h^{sub}_k(t) = -\frac{d}{dt}\log\{1 - \mathrm{CIF}_k(t)\}= \lim_{\delta t \to 0}\frac{P(t \le T < t+\delta t, C = k \mid T \ge t \text{ or } \{T < t \text{ and } C \ne k\})}{\delta t}$$
+
+. . .
+
+Fine and Gray (1999) assume
+
+$$h^{sub}_{ik}(t) = \exp(\boldsymbol\beta_k^{sub\prime} \mathbf{x}_i)\, h^{sub}_{0k}(t) \quad\Longleftrightarrow\quad \mathrm{CIF}_{ik}(t) = 1 - \{1 - \mathrm{CIF}_{0k}(t)\}^{\exp(\boldsymbol\beta_k^{sub\prime} \mathbf{x}_i)}$$
+
+A one-to-one link between the covariates and the CIF, like $S(t) = \exp\{-H(t)\}$ in the one-event case.
+
+## The risk set is different
+
+At an event time of cause $k$:
+
+| | Cause-specific Cox | Fine–Gray |
+|---|---|---|
+| Still event-free | in risk set | in risk set |
+| Had a **competing** event earlier | removed (censored) | **kept**, with weight $w < 1$ |
+| Censored earlier | removed | removed |
+
+. . .
+
+Weights (Collett Section 12.5.1): $w_{hl}(t) = \hat S_c(t) / \hat S_c(\min\{t, t_l\})$, where $\hat S_c$ is the Kaplan–Meier estimate of the **censoring** distribution. People who had a competing event keep contributing with declining weight.
+
+::: {.callout-warning}
+The "at risk" set contains people who cannot get cause $k$ any more. The subhazard is therefore **not** a rate in the usual sense, and the $\beta_k^{sub}$ are best read via their effect on $\mathrm{CIF}_k(t)$.
+:::
+
+## Fine–Gray in R: `tidycmprsk::crr()`
+
+```{r}
+fg_prog <- tidycmprsk::crr(Surv(etime, event) ~ age + sex + hgb, data = mgus, failcode = "progression")
+fg_death <- tidycmprsk::crr(Surv(etime, event) ~ age + sex + hgb, data = mgus, failcode = "death")
+fg_prog
+```
+
+`event` must be a **factor** with the censoring level first; `failcode` picks the cause. Output is a subdistribution HR (SHR) $\exp(\hat\beta_k^{sub})$.
+
+## The same with `cmprsk::crr()`
+
+The older interface takes times, a cause code, and a covariate **matrix**:
+
+```{r}
+X <- model.matrix(~ age + sex + hgb, data = mgus)[, -1]
+# explicit event labels instead of numeric factor codes
+fstat <- as.character(mgus$event)
+fg_prog2 <- cmprsk::crr(ftime = mgus$etime, fstatus = fstat,
+                        cov1 = X, failcode = "progression", cencode = "censored")
+round(summary(fg_prog2)$conf.int, 3)
+```
+
+Same estimates as `tidycmprsk` (which wraps `cmprsk`). `cmprsk::crr` provides `predict()` for CIFs, which we use later.
+
+## MGUS: interpreting Fine–Gray
+
+```{r}
+#| include: false
+sp <- exp(coef(fg_prog)); sd_ <- exp(coef(fg_death))
+psp <- setNames(fg_prog$tidy$p.value, fg_prog$tidy$term)
+```
+
+```{r}
+#| output-location: column
+tbl_merge(
+  list(tbl_regression(fg_prog, exponentiate = TRUE),
+       tbl_regression(fg_death, exponentiate = TRUE)),
+  tab_spanner = c("**Progression**", "**Death**")
+)
+```
+
+- Progression: SHR for age `r round(sp["age"], 2)` per year (p = `r round(psp["age"], 3)`), compared with the cause-specific HR `r round(cp["age"], 2)`. An SHR below 1 for age means a lower CIF of progression in older patients, which can reflect the higher death rate of the old rather than a protective effect on the progression process.
+- Death: SHR for age `r round(sd_["age"], 2)`, men `r round(sd_["sexM"], 2)`; cause-specific HRs were `r round(cd["age"], 2)` and `r round(cd["sexM"], 2)`.
+
+## Cause-specific HR vs subdistribution HR, MGUS
+
+```{r}
+#| echo: false
+#| fig-height: 4
+bind_rows(
+  broom::tidy(cs_prog, exponentiate = TRUE, conf.int = TRUE) |> mutate(model = "Cause-specific Cox", cause = "Progression"),
+  broom::tidy(fg_prog, exponentiate = TRUE, conf.int = TRUE) |> mutate(model = "Fine-Gray", cause = "Progression"),
+  broom::tidy(cs_death, exponentiate = TRUE, conf.int = TRUE) |> mutate(model = "Cause-specific Cox", cause = "Death"),
+  broom::tidy(fg_death, exponentiate = TRUE, conf.int = TRUE) |> mutate(model = "Fine-Gray", cause = "Death")
+) |>
+  mutate(term = recode(term, sexM = "sex (M vs F)")) |>
+  ggplot(aes(estimate, term, colour = model, xmin = conf.low, xmax = conf.high)) +
+  geom_vline(xintercept = 1, linetype = 2) +
+  geom_pointrange(position = position_dodge(width = 0.5)) +
+  scale_x_log10() +
+  facet_wrap(~cause, scales = "free_x") +
+  labs(x = "Hazard ratio (log scale)", y = NULL, colour = NULL) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| include: false
+cmp <- \(v) c(cs = cp[v], sub = sp[v])
+```
+
+Compare the two sets of intervals per covariate: for death, the cause-specific HR and SHR for age are `r round(cd["age"], 2)` and `r round(sd_["age"], 2)`; for progression, haemoglobin has HR `r round(cp["hgb"], 2)` and SHR `r round(sp["hgb"], 2)`, age has HR `r round(cp["age"], 2)` and SHR `r round(sp["age"], 2)`. Intervals that exclude 1 in one model but not the other show where the two questions give different answers.
+
+# Two models, two questions
+
+## Why can they differ?
+
+$$\mathrm{CIF}_1(t) = \int_0^t \exp\Big\{-\sum_k H_k(u)\Big\}\, h_1(u)\, du$$
+
+- Cause-specific Cox models $h_1$ only
+- Fine–Gray models $\mathrm{CIF}_1$, which also involves $h_2$
+
+If a covariate raises $h_2$ (the competing hazard), then:
+
+- the $h_1$ ratio can be $1$ (no direct effect on cause 1)
+- but fewer people survive long enough to experience cause 1, so $\mathrm{CIF}_1$ is **lower**: SHR < 1
+
+. . .
+
+The two HRs can differ in size, significance, **and sign**. This is not an error; they answer different questions.
+
+## Where they agree and where they disagree
+
+| Situation | CS HR vs SHR |
+|---|---|
+| Competing event rare or unrelated to $x$ | similar (e.g. liver data, Collett Table 12.5 vs 12.6) |
+| $x$ strongly affects the competing hazard | can differ a lot, even in direction |
+| Heavy censoring, few competing events | similar |
+| MGUS age effect on progression | CS HR `r round(cp["age"], 2)` vs SHR `r round(sp["age"], 2)` |
+
+Liver data, thrombosis, PBC vs ALD:
+
+```{r}
+fg_liver <- map(causes, \(k) tidycmprsk::crr(Surv(time, cause) ~ age + gender + disease, data = liver, failcode = k)) |>
+  set_names(causes)
+c(cause_specific = exp(coef(cs_liver$thrombosis))[["diseasePBC"]],
+  fine_gray = exp(coef(fg_liver$thrombosis))[["diseasePBC"]]) |> round(2)
+```
+
+## Which model? A guide
+
+::: {.columns}
+::: {.column width="50%"}
+**Cause-specific hazard**
+
+- Question: *"What is the effect of $x$ on the disease process / mechanism?"*
+- Aetiology, risk factors, treatment efficacy on the biology
+- Hazards are comparable across studies with different competing risks
+:::
+::: {.column width="50%"}
+**Fine–Gray**
+
+- Question: *"What is the effect of $x$ on the absolute risk of cause $k$?"*
+- Prediction, risk scores, counselling, health-economic planning
+- Directly linked to the CIF
+:::
+:::
+
+. . .
+
+::: {.callout-important}
+**Recommendation**: report **both**, plus CIF plots for the main groups (Austin, Lee and Fine 2016). The cause-specific results tell you why; the CIF tells you how much. Decide the primary analysis **before** seeing the data.
+:::
+
+## Pitfalls (regression)
+
+- Fine–Gray SHR is **not** a cause-specific HR. Do not say "rate among those at risk".
+- Do not interpret a non-significant SHR as "no effect on the biology of cause $k$".
+- Each cause needs its own model: an effect on cause 1 says nothing about cause 2.
+- Fine–Gray additionally uses the censoring distribution in its weights.
+
+# Predicting cumulative incidence
+
+## From Fine–Gray: `predict()` for a profile
+
+Patient profile: a 70-year-old man with hgb 13 g/dl, versus a woman of the same age and hgb.
+
+```{r}
+X <- model.matrix(~ age + sex + hgb, data = mgus)[, -1]
+fg_cm <- cmprsk::crr(mgus$etime, fstat, cov1 = X, failcode = "progression", cencode = "censored")
+newx <- rbind(Male = c(age = 70, sexM = 1, hgb = 13),
+              Female = c(age = 70, sexM = 0, hgb = 13))
+pr <- predict(fg_cm, cov1 = newx)   # first column: time; then one CIF per row
+head(pr, 3)
+```
+
+```{r}
+#| include: false
+at <- \(m, tt) approx(pr[, 1], pr[, m + 1], xout = tt, method = "constant", f = 0, rule = 2)$y
+```
+
+At 10 years (120 months): man `r round(at(1, 120), 3)`, woman `r round(at(2, 120), 3)` (progression).
+
+## From cause-specific models: combine them
+
+No single `predict()` gives a CIF from cause-specific models; assemble it from the pieces
+
+$$\widehat{\mathrm{CIF}}_k(t \mid \mathbf{x}) = \sum_{t_l \le t} \hat S(t_l- \mid \mathbf{x})\, \Delta \hat H_k(t_l \mid \mathbf{x})$$
+
+1. `survfit(coxph_k, newdata)` gives $\hat H_k(t \mid \mathbf{x})$ for each cause
+2. $\hat S(t) = \exp\{-\hat H_1(t) - \hat H_2(t)\}$ (all-cause survival)
+3. Accumulate $\hat S(t_l-)\,\Delta \hat H_k(t_l)$
+
+(`riskRegression::CSC()` with `predict()` automates this.)
+
+## Worked code: CIFs from cause-specific models
+
+```{r}
+cif_cs <- function(fits, newdata, times) {
+  # cumulative hazard of each cause on a common time grid
+  H <- sapply(fits, \(f) {
+    sf <- survfit(f, newdata = newdata)
+    stepfun(sf$time, c(0, sf$cumhaz))(times)
+  })
+  S_all <- exp(-rowSums(H))
+  S_prev <- c(1, head(S_all, -1))
+  apply(H, 2, \(h) cumsum(S_prev * diff(c(0, h))))
+}
+grid <- seq(0, 300, by = 1)
+nd <- data.frame(age = 70, sex = "M", hgb = 13)
+F_cs <- cif_cs(list(progression = cs_prog, death = cs_death), nd, grid)
+round(F_cs[grid == 120, ], 3)
+```
+
+At 120 months for the 70-year-old man with hgb 13: progression `r round(F_cs[grid == 120, "progression"], 3)`, death `r round(F_cs[grid == 120, "death"], 3)`.
+
+## Comparing the two predictions
+
+```{r}
+#| echo: false
+#| fig-height: 4.3
+tibble(time = grid, `Cause-specific Cox (combined)` = F_cs[, "progression"],
+       `Fine-Gray` = at(1, grid)) |>
+  pivot_longer(-time, names_to = "method", values_to = "cif") |>
+  ggplot(aes(time, cif, colour = method)) +
+  geom_step(linewidth = 1) +
+  labs(x = "Months since diagnosis", y = "Cumulative incidence of progression",
+       colour = NULL, title = "70-year-old man, hgb 13 g/dl") +
+  theme(legend.position = "bottom")
+```
+
+Both are estimates of the same $\mathrm{CIF}_1(t \mid \mathbf{x})$; they use different model assumptions (PH for the cause-specific hazards vs PH for the subhazard) and so can differ somewhat.
+
+## Patient profiles: both causes, men vs women
+
+```{r}
+#| echo: false
+#| fig-height: 4.3
+nd2 <- data.frame(age = 70, sex = c("M", "F"), hgb = 13)
+out <- map_dfr(1:2, \(i) {
+  F <- cif_cs(list(progression = cs_prog, death = cs_death), nd2[i, ], grid)
+  as_tibble(F) |> mutate(time = grid, sex = nd2$sex[i])
+}) |> pivot_longer(c(progression, death), names_to = "cause", values_to = "cif")
+ggplot(out, aes(time, cif, colour = sex, linetype = cause)) +
+  geom_step(linewidth = 1) +
+  labs(x = "Months since diagnosis", y = "Cumulative incidence", colour = "Sex",
+       title = "Cause-specific Cox models, age 70, hgb 13") +
+  theme(legend.position = "bottom")
+```
+
+Death dominates for men. The CIFs of the two causes plus $\hat S(t)$ always sum to 1.
+
+## Prediction with `tidycmprsk`
+
+```{r}
+nd_m <- data.frame(age = 70, sex = factor("M", levels = c("F", "M")), hgb = 13,
+                   etime = 1, event = factor("censored", levels(mgus$event)))
+predict(fg_prog, times = c(60, 120, 240), newdata = nd_m) |> unlist() |> round(3)
+```
+
+`newdata` must also contain the outcome columns (dummy values are fine). The same quantity as `predict.crr` above (progression CIF at 5, 10, 20 years). Report **absolute risks** with a confidence interval where possible; the CIF is easier to communicate to a patient than any HR.
+
+## Liver data: a prediction example
+
+Fine–Gray model for **recurrent disease**: 55-year-old woman, by primary disease (CIF at 1, 3 and 6 years).
+
+```{r}
+nd <- expand_grid(age = 55, gender = "Female", disease = c("ALD", "PBC", "PSC")) |>
+  mutate(gender = factor(gender, levels(liver$gender)), disease = factor(disease, levels(liver$disease)),
+         time = 1, cause = factor("censored", levels(liver$cause)))
+pr_l <- predict(fg_liver[["recurrent disease"]], times = c(365, 1095, 2190), newdata = nd)
+tibble(disease = nd$disease, year1 = pr_l[[1]], year3 = pr_l[[2]], year6 = pr_l[[3]]) |>
+  mutate(across(starts_with("year"), \(x) round(x, 3)))
+```
+
+# Checking and extensions
+
+## Checking proportional hazards
+
+**Cause-specific Cox**: as in Lecture 6, `cox.zph()` per cause.
+
+```{r}
+#| output-location: column
+cox.zph(cs_death)
+```
+
+```{r}
+#| include: false
+zp <- cox.zph(cs_death)$table[, "p"]
+fp <- \(x) ifelse(x < 0.001, "< 0.001", paste("=", round(x, 3)))
+```
+
+For death in MGUS the p-values of the PH tests are: `r str_c(names(zp), " ", fp(zp), collapse = ", ")`. Values below 0.05 indicate that the effect of that covariate changes over time.
+
+. . .
+
+**Fine–Gray**: the PH assumption is on the subhazard. A simple check: add a covariate-by-time interaction in `cmprsk::crr`:
+
+```{r}
+fg_tv <- cmprsk::crr(mgus$etime, fstat, cov1 = X[, "hgb", drop = FALSE],
+                     cov2 = X[, "age", drop = FALSE], tf = function(t) log(t),
+                     failcode = "death", cencode = "censored")
+round(summary(fg_tv)$coef, 3)
+```
+
+The row `age*tf1` (log-time interaction) tests whether the age effect on the death CIF changes over time; a coefficient clearly different from zero suggests non-PH. Residual plots and extensions such as time-dependent effects (Collett Section 12.6) apply per cause.
+
+## Beyond Fine–Gray: direct binomial and pseudo-values
+
+Another way to regress on the CIF at fixed times $t_0$: model $P(T \le t_0, C = k \mid \mathbf{x})$ directly with a link function (**direct binomial regression**) or via **pseudo-values** computed from the Aalen–Johansen estimator and then GLM or GEE. Useful when PH for the subhazard fails; not covered further here.
+
+## What competing risks mean for treatment effects
+
+Constant-hazard CIF formula: see Lecture 12. Suppose treatment **lowers** the hazard of cause 1 but **raises** the hazard of cause 2 (e.g. a drug against cancer progression with a cardiac side-effect).
+
+```{r}
+#| echo: false
+#| fig-height: 3.8
+cif1 <- \(h1, h2, t) h1 / (h1 + h2) * (1 - exp(-(h1 + h2) * t))   # constant hazards, see Lecture 12
+t <- seq(0, 20, 0.1)
+expand_grid(t = t, arm = c("Control", "Treatment")) |>
+  mutate(h1 = ifelse(arm == "Control", 0.10, 0.05), h2 = ifelse(arm == "Control", 0.02, 0.06),
+         `Cause 1` = cif1(h1, h2, t), `Cause 2` = cif1(h2, h1, t)) |>
+  pivot_longer(starts_with("Cause"), names_to = "cause", values_to = "CIF") |>
+  ggplot(aes(t, CIF, colour = arm)) + geom_line(linewidth = 1) +
+  facet_wrap(~cause) + labs(x = "Time", y = "Cumulative incidence", colour = NULL) +
+  theme(legend.position = "bottom")
+```
+
+*Illustrative constant hazards (cause 1: 0.10 vs 0.05; cause 2: 0.02 vs 0.06 per unit time).*
+
+- Cause-specific HRs: 0.5 for cause 1, 3 for cause 2. A trade-off to **report separately**.
+- Do not summarise with one "composite" HR without looking at its components.
+- Whether the treatment is "good" depends on how serious each cause is: weigh the CIFs, or use all-cause survival.
+
+## Sample size: events per cause
+
+- Power is driven by **number of events of each cause**, not by $n$
+- Rule of thumb for Cox models: about 10 events per parameter, *per cause model*
+- Liver data: $n =$ `r nrow(liver)`, but
+
+```{r}
+liver |> filter(cause != "censored") |> count(cause)
+```
+
+- The 3-level `disease` plus `age` and `gender` is 4 parameters; with few rejections the models are barely estimable
+- Rare causes: reduce the model or group causes, only if clinically sensible
+- Heavy censoring and competing events both reduce the information on cause $k$
+
+# Exercise
+
+## In-class exercise (10 min)
+
+Liver data (`liver`): study **graft failure from thrombosis** (`cause == "thrombosis"`).
+
+1. Fit the cause-specific Cox model and the Fine–Gray model with `age + gender + disease`.
+2. Compare the HRs for PBC vs ALD and for `gender`. Do they agree in direction and size?
+3. Predict the CIF at 1 and 5 years for a 50-year-old man with PSC.
+4. Which model would you use for (a) a paper on risk factors for thrombosis, (b) a nomogram for a transplant team?
+
+```{r}
+#| eval: false
+cs <- coxph(Surv(time, cause == "thrombosis") ~ age + gender + disease, data = liver)
+fg <- tidycmprsk::crr(Surv(time, cause) ~ age + gender + disease, data = liver, failcode = "thrombosis")
+# predict(fg, times = c(365, 1826), newdata = data.frame(...))
+```
+
+# Wrap-up
+
+## Take-home messages
+
+- **Cause-specific Cox**: one model per cause, others censored; HR = effect on the rate among those still event-free; answers aetiological questions
+- **Fine–Gray**: subdistribution hazard, competing-event subjects stay in the (weighted) risk set; SHR = effect on the **CIF**; answers prediction and absolute-risk questions
+- The two can differ in size and **direction**; neither is wrong
+- **Report both**, together with CIF plots; predict CIFs for patient profiles
+- Check PH in each model; watch the number of **events per cause**
+- Alternative: direct binomial / pseudo-value regression for the CIF
+
+**Next lecture**: recurrent events and event history analysis (Collett, Chapter 13).
+
+**Reading**: Collett, Chapter 12, Sections 12.4 to 12.6 (modelling cause-specific hazards, the Fine and Gray model, model checking). Further: Austin, Lee and Fine (2016), *Circulation* 133:601–609; Fine and Gray (1999), *JASA* 94:496–509.

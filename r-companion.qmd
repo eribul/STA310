@@ -1,0 +1,873 @@
+---
+title: "Survival Analysis with R — Companion"
+subtitle: "STA310 · package and function guide by Collett chapter, with worked examples"
+lang: en
+format:
+  typst:
+    toc: true
+execute:
+  warning: false
+  message: false
+---
+
+This document is an R companion to Collett (2023), organised chapter by chapter. For
+each topic it lists the functions used in the book (Chapter 17) together with more
+modern alternatives, and gives worked, runnable examples with interpretation using the
+book's own data sets. All packages are on CRAN; functions are written as
+`package::function` (base functions and S3 generics such as `summary()`, `plot()` and
+`coef()` are left unqualified). The `Surv()` term inside a model formula is also left
+unqualified — formula syntax requires the bare `Surv()` — whereas a `Surv` object created
+outside a formula is written `survival::Surv()`.
+
+*Chapters 1–16 are covered.*
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(gtsummary)
+library(survminer)
+library(glmnet)
+library(broom)
+library(timeROC)
+library(riskRegression)
+library(rms)
+library(flexsurv)
+library(icenReg)
+library(pseudo)
+library(cmprsk)
+```
+
+::: {.callout-note}
+## CRAN Packages used in the examples
+
+Install once with:
+
+```r
+install.packages(c(
+  "broom", 
+  "glmnet", 
+  "gtsummary", 
+  "ggsurvfit", 
+  "survminer", 
+  "timeROC", 
+  "riskRegression", 
+  "rms",
+  "flexsurv",
+  "icenReg",
+  "pseudo",
+  "cmprsk"
+))
+```
+:::
+
+The examples use the data sets that accompany the book (the folder "Data sets from
+Modelling Survival Data in Medical Research, 4th edition"). Download them [here (click)](https://s3-eu-west-1.amazonaws.com/s3-euw1-ap-pe-ws4-cws-documents.ri-prod/9781032252858/Data%20sets%20from%20Modelling%20Survival%20Data%20in%20Medical%20Research%2C%204th%20edition.zip).
+
+The relevant ones for Chapters 1–16 are:
+
+- **IUD** (`iud`): time in weeks to discontinuation of an intrauterine device for 18
+  women (Example 1.1).
+- **Multiple myeloma** (`myeloma`): survival of 48 patients, with seven covariates —
+  age, sex, blood urea nitrogen (`bun`), serum calcium (`ca`), haemoglobin (`hb`),
+  percentage of plasma cells (`pcells`) and `protein` (Example 1.3).
+- **Breast cancer** (`breast`): survival of 45 women classified by HPA staining
+  (`stain`) (Example 1.2).
+
+```{r}
+data_dir <- "Data sets from Modelling Survival Data in Medical Research, 4th edition"
+
+iud <- read.table(
+  file.path(data_dir, "Time to discontinuation of the use of an IUD.dat"),
+  header = TRUE
+)
+myeloma <- read.table(
+  file.path(data_dir, "Survival of multiple myeloma patients.dat"),
+  header = TRUE
+)
+breast <- read.table(
+  file.path(data_dir, "Prognosis for women with breast cancer.dat"),
+  header = TRUE
+)
+breast$stain <- breast$stain - 1 # 0 = negative, 1 = positive HPA staining
+
+# Additional data sets used in Chapters 5–16
+hyper      <- read.table(file.path(data_dir, "Treatment of hypernephroma.dat"), header = TRUE)                 # Ch. 6
+ovarian    <- read.table(file.path(data_dir, "Chemotherapy in ovarian cancer patients.dat"), header = TRUE)     # Ch. 7
+bmt        <- read.table(file.path(data_dir, "Bone marrow transplantation.dat"), header = TRUE)                 # Ch. 8
+kidney     <- read.table(file.path(data_dir, "Survival following kidney transplantation.dat"), header = TRUE)    # Ch. 10
+gastric    <- read.table(file.path(data_dir, "Survival of patients with gastric cancer.dat"), header = TRUE)     # Ch. 11
+liver      <- read.table(file.path(data_dir, "Survival of liver transplant recipients.dat"), header = TRUE)      # Ch. 12
+liver_wait <- read.table(file.path(data_dir, "Time to death while waiting for a liver transplant.dat"), header = TRUE) # Ch. 14
+hep        <- read.table(file.path(data_dir, "Chronic active hepatitis.dat"), header = TRUE)                     # Ch. 15
+```
+
+In all these files `status` is already coded 1 = event, 0 = right-censored.
+
+# Chapter 1 — Survival analysis
+
+*The `Surv` object and the survivor, hazard and cumulative hazard functions* (§1.2, §1.4).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Create a survival object | `survival::Surv()` | — |
+| Estimate $S(t)$ (Kaplan–Meier) | `survival::survfit()` | `prodlim::prodlim()`, `rms::npsurv()` |
+| Estimate $H(t)$ | `survival::survfit(type = "fleming-harrington")` | `prodlim::prodlim()` |
+| Plot $S(t)$ | `plot(survival::survfit(...))` | `ggsurvfit::ggsurvfit()`, `survminer::ggsurvplot()` |
+| Smooth estimate of $h(t)$ | — | `muhaz::muhaz()`, `bshazard::bshazard()` |
+
+## The `Surv` object
+
+A right-censored observation is stored as a pair (time, event indicator).
+`survival::Surv()` creates that object; the `+` marks censored times (here the first
+few women in the IUD study, Example 1.1):
+
+```{r}
+survival::Surv(iud$time, iud$status)
+```
+
+The event indicator is 1 for an observed event and 0 for censoring, so the first four
+women contribute `10`, `13+`, `18+`, `19`: one discontinuation and two censored times
+before the next event.
+
+## Estimating and plotting $S(t)$ and $H(t)$
+
+The Kaplan–Meier estimate of $S(t)$ is obtained from `survival::survfit()` and rendered
+with `ggsurvfit::ggsurvfit()`:
+
+```{r}
+ggsurvfit::survfit2(Surv(time, status) ~ 1, data = iud) |>
+  ggsurvfit::ggsurvfit() +
+  ggsurvfit::add_confidence_interval() +
+  ggsurvfit::add_censor_mark() +
+  ggplot2::labs(x = "Time (weeks)", y = "Survival probability S(t)")
+```
+
+The cumulative hazard is plotted with `fun = "cumhaz"` (a `survminer::ggsurvplot()`
+transformation; `survival::survfit()` itself always returns survival):
+
+```{r}
+survminer::ggsurvplot(
+  survival::survfit(Surv(time, status) ~ 1, data = iud),
+  fun = "cumhaz",
+  conf.int = TRUE,
+  xlab = "Time (weeks)",
+  ylab = "Cumulative hazard H(t)"
+)
+```
+
+**Interpretation.** The survivor curve is a step function that drops only at observed
+discontinuation times and stays flat in between (censored observations reduce the risk
+set but do not cause a drop). The cumulative hazard is monotonically increasing; from
+(1.6) the two are linked by $S(t) = \exp\{-H(t)\}$. The estimated median survival time is
+read off where the curve crosses $S(t) = 0.5$.
+
+# Chapter 2 — Some non-parametric procedures
+
+*Kaplan–Meier and Nelson–Aalen estimation, medians, and group comparisons* (§2.1–2.9).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| KM / Nelson–Aalen estimate | `survival::survfit(type = "kaplan-meier" / "fleming-harrington")` | `prodlim::prodlim()`, `rms::npsurv()` |
+| SE and CI of $\hat S(t)$ | `summary(survival::survfit(...))` | — |
+| Median and percentiles | `quantile(survival::survfit(...))` | — |
+| Two-group tests | `survival::survdiff()` (`rho = 0` log-rank, `rho = 1` Peto–Peto) | `coin::logrank_test()`, `FHtest::FHtestrcc()` |
+| Plots with risk tables | `plot(survival::survfit(...))` | `ggsurvfit::ggsurvfit(+ add_risktable())`, `survminer::ggsurvplot()` |
+
+## Kaplan–Meier estimate with risk table
+
+We estimate the survivor function for the 48 multiple myeloma patients (Example 2.2):
+
+```{r}
+ggsurvfit::survfit2(Surv(time, status) ~ 1, data = myeloma) |>
+  ggsurvfit::ggsurvfit() +
+  ggsurvfit::add_confidence_interval() +
+  ggsurvfit::add_risktable() +
+  ggplot2::labs(x = "Time (months)", y = "Survival probability S(t)")
+```
+
+The printed summary gives $\hat S(t)$, its standard error (Greenwood, eq. 2.12) and the
+confidence interval at chosen times:
+
+```{r}
+sfit2 <- survival::survfit(Surv(time, status) ~ 1, data = myeloma)
+summary(sfit2, times = c(12, 24, 48))
+s24 <- summary(sfit2, times = 24)$surv
+```
+
+**Interpretation.** An estimated `r round(100 * s24)`% of patients survive beyond 24
+months. The risk table underneath the plot shows how the number at risk shrinks as
+patients die or are censored.
+
+## Nelson–Aalen and the median
+
+The Nelson–Aalen estimator (eq. 2.5) is obtained with `type = "fleming-harrington"`; the
+estimated median and other percentiles come from `quantile()` (here for the IUD data,
+Example 2.8):
+
+```{r}
+med <- quantile(
+  survival::survfit(Surv(time, status) ~ 1, data = iud),
+  probs = c(0.25, 0.5, 0.75)
+)
+med
+```
+
+**Interpretation.** The estimated median time to discontinuation is `r med$quantile["50"]`
+weeks, with lower 95% limit `r med$lower["50"]` weeks; the upper limit is undefined
+because the survival curve's upper confidence band never falls below 0.5 within the
+follow-up.
+
+## Comparing two groups
+
+The log-rank test (`rho = 0`) and the Peto–Peto test (`rho = 1`) for the two breast-cancer
+staining groups (Examples 2.11–2.13):
+
+```{r}
+lr <- survival::survdiff(Surv(time, status) ~ stain, data = breast, rho = 0)
+peto <- survival::survdiff(Surv(time, status) ~ stain, data = breast, rho = 1)
+lr
+peto
+```
+
+**Interpretation.** The log-rank statistic is χ² = `r round(lr$chisq, 1)` on 1 d.f.,
+p = `r round(1 - pchisq(lr$chisq, 1), 2)`. The positively stained group has more observed
+deaths than expected under the null (`r lr$obs[2]` vs `r round(lr$exp[2], 1)`), so positive
+staining is associated with worse survival, but the evidence is only modest and not
+significant at the 5% level. The Peto–Peto test, which down-weights the tail, gives
+χ² = `r round(peto$chisq, 1)`, p = `r round(1 - pchisq(peto$chisq, 1), 2)` — a similar
+conclusion. The book's Wilcoxon test (weighting by $n_j$) is not in base `survival`; use
+`coin::logrank_test()` or `FHtest::FHtestrcc()` (both CRAN).
+
+# Chapter 3 — The Cox regression model
+
+*Fitting, inference, model checking and prediction* (§3.1–3.14).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Fit a Cox model | `survival::coxph()` | `rms::cph()`, `glmnet::glmnet(family = "cox")`, tidymodels `censored` |
+| HR, CI, $p$-values | `summary(survival::coxph(...))` | `broom::tidy()`, `gtsummary::tbl_regression()` |
+| Baseline hazard / survival | `survival::basehaz()` | `survival::survfit(survival::coxph(...))` |
+| PH assumption | `survival::cox.zph()` | `rms::cox.zph()` |
+| Residuals | `residuals(..., type = "...")` | — |
+| Lasso variable selection | `penalized::penalized()` | `glmnet::glmnet(family = "cox")` |
+| Firth correction (separation) | — | `coxphf::coxphf()` |
+| Concordance | `survival::concordance()` | `CPE::phcpe()` (Gönen–Heller), `pec::pec()`, `riskRegression::Score()` |
+| Time-dependent ROC | `survivalROC::survivalROC()` | `timeROC::timeROC()`, `riskRegression::Score()` |
+| Forest plot | — | `survminer::ggforest()`, `ggstats::ggcoef_model()` |
+
+## Fitting a Cox model with a single binary covariate
+
+Example 3.1 models the hazard of death for the breast-cancer patients in terms of HPA
+staining (0 = negative, 1 = positive):
+
+```{r}
+fit_bc <- survival::coxph(Surv(time, status) ~ stain, data = breast)
+summary(fit_bc)
+
+hr_bc <- exp(coef(fit_bc))[["stain"]]
+ci_bc <- exp(confint(fit_bc))["stain", ]
+p_bc <- summary(fit_bc)$coefficients["stain", "Pr(>|z|)"]
+```
+
+**Interpretation.** The estimated hazard ratio for positive versus negative staining is
+`r round(hr_bc, 2)` (95% CI `r round(ci_bc[1], 2)`–`r round(ci_bc[2], 2)`, p = `r round(p_bc, 2)`):
+the hazard of death at any time is about `r round(hr_bc, 2)` times as high for a woman
+with a positively stained tumour, so positive staining indicates a poorer prognosis.
+
+## Fitting a Cox model with several covariates
+
+Example 3.2 models the hazard of death for the myeloma patients in terms of all seven
+recorded covariates:
+
+```{r}
+fit <- survival::coxph(
+  Surv(time, status) ~ age + sex + bun + ca + hb + pcells + protein,
+  data = myeloma
+)
+summary(fit)
+
+hr_bun <- exp(coef(fit))[["bun"]]
+p_bun <- summary(fit)$coefficients["bun", "Pr(>|z|)"]
+hr_hb <- exp(coef(fit))[["hb"]]
+p_hb <- summary(fit)$coefficients["hb", "Pr(>|z|)"]
+lt <- summary(fit)$logtest
+```
+
+**Interpretation.** Each coefficient is a log hazard ratio. The two covariates most
+clearly associated with survival are blood urea nitrogen and haemoglobin: a one-unit
+higher `bun` multiplies the hazard by `r round(hr_bun, 3)` (p = `r round(p_bun, 4)`), while
+a one-unit higher `hb` multiplies it by `r round(hr_hb, 3)` (p = `r round(p_hb, 3)`). The
+other covariates (age, sex, serum calcium, plasma cells, protein) are not individually
+significant. The likelihood-ratio test (χ² = `r round(lt[1], 1)` on `r lt[2]` d.f.,
+p = `r round(lt[3], 2)`) shows the model as a whole is useful.
+
+## Publication-ready tables
+
+`broom::tidy()` turns the fit into a data frame; `gtsummary::tbl_regression()` produces a
+table ready for a report:
+
+```{r}
+broom::tidy(fit, exponentiate = TRUE, conf.int = TRUE)
+```
+
+```{r}
+gtsummary::tbl_regression(fit, exponentiate = TRUE)
+```
+
+## Model checking: the proportional hazards assumption
+
+```{r}
+cz <- survival::cox.zph(fit)
+cz
+```
+
+**Interpretation.** `survival::cox.zph()` tests each covariate (and the model as a whole)
+for proportional hazards by correlating the Schoenfeld residuals with time. Here none of
+the covariates shows evidence against PH (the global p-value is
+`r round(cz$table["GLOBAL", "p"], 2)`), so the proportional-hazards assumption appears
+tenable for this model.
+
+## Concordance
+
+The concordance (c-index) measures how often the model ranks a longer survivor above a
+shorter one:
+
+```{r}
+cconc <- survival::concordance(fit)
+cconc
+```
+
+**Interpretation.** A concordance of `r round(cconc$concordance, 3)` means the model
+discriminates higher-risk from lower-risk patients reasonably well (0.5 is chance; values
+above about 0.7 are generally considered useful). The Gönen–Heller concordance probability
+estimate (`CPE::phcpe()`) is an alternative that does not depend on the censoring
+distribution. Time-dependent AUC and Brier scores are computed below with
+`timeROC::timeROC()` and `riskRegression::Score()`.
+
+## Time-dependent ROC and prediction error
+
+`riskRegression::Score()` estimates the time-dependent AUC with bootstrap confidence
+intervals, comparing a risk model against the null (no-covariate) model:
+
+```{r}
+sc <- riskRegression::Score(
+  list(
+    risk = survival::coxph(
+      Surv(time, status) ~ bun + hb + age + sex,
+      data = myeloma,
+      x = TRUE
+    )
+  ),
+  Surv(time, status) ~ 1,
+  data = myeloma,
+  times = c(12, 24, 36),
+  metrics = "auc",
+  plots = "ROC"
+)
+sc
+
+auc12 <- sc$AUC$score$AUC[sc$AUC$score$times == 12]
+auc24 <- sc$AUC$score$AUC[sc$AUC$score$times == 24]
+```
+
+**Interpretation.** The AUC is about `r round(100 * auc12, 1)`% at 12 months and
+`r round(100 * auc24, 1)`% at 24 months, so discrimination is best in the short term. The
+ROC curves are drawn with `riskRegression::plotROC()`:
+
+```{r}
+riskRegression::plotROC(sc, time = 12)
+```
+
+`timeROC::timeROC()` computes the same inverse-probability-of-censoring (IPCW) AUC
+directly from a single marker, without fitting a model. Note that haemoglobin is
+*protective* (higher = better survival), so it is negated to form a risk score (higher =
+worse); otherwise the AUC would fall below 0.5:
+
+```{r}
+roc <- timeROC::timeROC(
+  T = myeloma$time,
+  delta = myeloma$status,
+  marker = -myeloma$hb,
+  cause = 1,
+  weighting = "marginal",
+  times = c(12, 24, 36),
+  iid = TRUE
+)
+roc
+plot(roc, time = 12, col = 1, title = "Time-dependent ROC at 12 months")
+```
+
+**Interpretation.** The marginal IPCW AUC based on haemoglobin alone is
+`r round(100 * roc$AUC[1], 1)`% at 12 months — weaker than the multivariate risk score,
+because a single covariate carries less information than the combined model.
+
+## Lasso variable selection
+
+The lasso (eq. 3.16) shrinks coefficients and sets some to exactly zero.
+`glmnet::glmnet()` implements it for the Cox model; cross-validation selects $\lambda$
+(Example 3.7):
+
+```{r}
+X <- as.matrix(myeloma[c("age", "sex", "bun", "ca", "hb", "pcells", "protein")])
+Y <- survival::Surv(myeloma$time, myeloma$status)
+
+cvfit <- glmnet::cv.glmnet(X, Y, family = "cox", cox.ties = "breslow")
+plot(cvfit)
+coef(cvfit, s = "lambda.min")
+```
+
+**Interpretation.** The left edge of the plot is the fully penalised (null) model; as
+$\log\lambda$ decreases, more covariates enter. At `lambda.min` the coefficients above are
+shown (a `.` means the covariate was set to zero and excluded): the lasso retains `bun`,
+`hb` and `protein` and drops the rest. A 10-fold cross-validated choice of $\lambda$
+guards against overfitting. Note that lasso coefficients are biased toward zero, so
+standard errors and $p$-values are usually not reported after selection.
+
+## Predicted survival curves from the model
+
+Given a fitted Cox model, `survival::survfit()` returns estimated survival curves for
+specified covariate patterns (eq. 3.26). Here we compare patients with low and high blood
+urea nitrogen, holding the other covariates fixed:
+
+```{r}
+plot(
+  survival::survfit(
+    fit,
+    newdata = data.frame(
+      age = 60,
+      sex = 1,
+      bun = c(10, 30),
+      ca = 10,
+      hb = 12,
+      pcells = 50,
+      protein = 1
+    )
+  ),
+  col = 1:2,
+  xlab = "Time (months)",
+  ylab = "Survival probability S(t)"
+)
+legend("topright", legend = c("bun = 10", "bun = 30"), col = 1:2, lty = 1)
+```
+
+**Interpretation.** The curves use $\hat S_i(t) = \hat S_0(t)^{\exp(\hat\eta_i)}$
+(eq. 3.26): the patient with higher blood urea nitrogen has a lower estimated survival
+curve, all else equal. The two curves never cross because of the proportional-hazards
+structure.
+
+## An alternative framework: `rms`
+
+Frank Harrell's `rms` package offers `rms::cph()` (Cox) with a consistent interface for
+validation, calibration and plotting:
+
+```{r}
+dd <- rms::datadist(myeloma)
+options(datadist = "dd")
+f <- rms::cph(
+  Surv(time, status) ~ age + sex + bun + ca + hb + pcells + protein,
+  data = myeloma,
+  x = TRUE,
+  y = TRUE
+)
+f
+```
+
+**Interpretation.** `rms::cph()` reports the same hazard ratios as `survival::coxph()` but
+stores the design matrix, enabling `rms::validate()` (bootstrap optimism correction) and
+`rms::calibrate()` (calibration plots), which are the package's main advantages for
+prediction modelling.
+
+# Chapter 4 — Model checking in the Cox regression model
+
+*Residuals, influential observations and the proportional hazards assumption* (§4.1–4.5).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Cox–Snell / martingale / deviance residuals | `residuals(..., type = "...")` | `rms::resid()` |
+| Schoenfeld residuals | `residuals(..., type = "schoenfeld")` | `survival::cox.zph()` |
+| Influence (dfbeta) | `residuals(..., type = "dfbeta")` | `rms::which.influence()` |
+
+## Residuals and influence
+
+We reuse the myeloma model `fit` from Chapter 3. Martingale residuals (eq. 4.6) check the
+functional form of a covariate; dfbeta measures each observation's influence:
+
+```{r}
+r_mart <- residuals(fit, type = "martingale")
+r_dev  <- residuals(fit, type = "deviance")
+plot(myeloma$bun, r_mart, xlab = "Blood urea nitrogen", ylab = "Martingale residual")
+abline(h = 0, lty = 2)
+```
+
+```{r}
+dfb <- residuals(fit, type = "dfbeta")
+round(head(dfb), 3)
+```
+
+**Interpretation.** Martingale residuals hovering around zero with no systematic trend
+support a linear effect of `bun`. Each row of `dfb` is the change in a coefficient when
+that patient is removed; large absolute values flag influential observations. Deviance
+residuals (`r_dev`, eq. 4.7) are centred and more symmetric, making outliers easier to
+spot.
+
+# Chapter 5 — Parametric regression models
+
+*Exponential, Weibull and related distributions; PH and AFT models* (§5.1–5.17).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Parametric PH/AFT models | `survival::survreg()` | `flexsurv::flexsurvreg()` |
+| Flexible spline models | — | `flexsurv::flexsurvspline()` (Chapter 6) |
+
+## Fitting exponential and Weibull models
+
+For the IUD data we fit exponential and Weibull models and compare them:
+
+```{r}
+exp_fit <- survival::survreg(Surv(time, status) ~ 1, data = iud, dist = "exponential")
+wei_fit <- survival::survreg(Surv(time, status) ~ 1, data = iud, dist = "weibull")
+summary(wei_fit)
+AIC(exp_fit, wei_fit)
+```
+
+`flexsurv::flexsurvreg()` reports the same model on the hazard scale:
+
+```{r}
+flexsurv::flexsurvreg(Surv(time, status) ~ 1, data = iud, dist = "weibull")
+```
+
+**Interpretation.** `survreg` is parameterised as an accelerated failure time model,
+$\log T = \mu + \sigma W$ (eq. 5.61); the Weibull shape is $1/\text{scale}$. The smaller
+AIC identifies the preferred model. `flexsurvreg` uses the hazard-scale parameterisation
+(shape $\gamma$ and rate $\lambda$, eq. 5.4), which is closer to the book's notation.
+
+# Chapter 6 — Flexible parametric models
+
+*Piecewise and spline-based models* (§6.1–6.5).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Royston–Parmar spline models | — | `flexsurv::flexsurvspline()`, `rstpm2::stpm2()` |
+| Piecewise exponential | `survival::survreg()` (in intervals) | `flexsurv::flexsurvspline()` |
+
+## A Royston–Parmar model
+
+We model the log cumulative hazard of the hypernephroma patients with a restricted cubic
+spline in log time:
+
+```{r}
+flexsurv::flexsurvspline(Surv(time, status) ~ nephrectomy, data = hyper, k = 1)
+```
+
+**Interpretation.** The spline terms give a smooth baseline log cumulative hazard
+(eq. 6.13), avoiding the rigid shape assumptions of a single parametric distribution.
+`nephrectomy` enters as a proportional-hazards term, so its exponentiated coefficient is
+the hazard ratio for nephrectomy.
+
+# Chapter 7 — Model checking in parametric models
+
+*Residuals for parametric models* (§7.1–7.5).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Standardised / Cox–Snell / martingale / deviance residuals | `residuals(survival::survreg(...), type = "...")` | — |
+
+## Residuals for a Weibull model
+
+```{r}
+ov_fit <- survival::survreg(Surv(time, status) ~ treat, data = ovarian, dist = "weibull")
+r_dev_ov <- residuals(ov_fit, type = "deviance")
+plot(ovarian$treat, r_dev_ov, xlab = "Treatment", ylab = "Deviance residual")
+```
+
+**Interpretation.** Deviance residuals (eq. 7.5) should be roughly symmetric around zero
+with no pattern across covariates; outliers or a trend indicate a poor fit.
+
+# Chapter 8 — Time-dependent variables
+
+*Covariates and coefficients that change over time* (§8.1–8.7).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Time-dependent covariates | `survival::Surv(start, stop, event)` + `survival::coxph()` | `JM` |
+| Time-varying coefficients | `survival::coxph(..., tt = ...)` | — |
+
+## A time-varying coefficient
+
+The bone-marrow transplant data (`bmt`) records recipient age `rage`. We allow its effect
+to vary with log time via `tt()`:
+
+```{r}
+m_tt <- survival::coxph(Surv(time, status) ~ rage + tt(rage), data = bmt,
+                        tt = function(x, t, ...) x * log(t))
+summary(m_tt)
+```
+
+**Interpretation.** `rage` is the constant part of the effect and `tt(rage)` its
+interaction with $\log t$ (eq. 8.1). Here `tt(rage)` is not significant, so there is
+little evidence that the effect of recipient age changes over time. Genuinely
+time-dependent covariates (e.g. a treatment that starts later) are coded in
+counting-process format `Surv(start, stop, event)` with one row per time interval.
+
+# Chapter 9 — Interval-censored survival data
+
+*Turnbull NPMLE and semi-parametric models* (§9.1–9.4).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Non-parametric MLE (Turnbull) | `interval::icfit()` | `icenReg::ic_np()` |
+| Semi-parametric (PH) models | `interval::...` | `icenReg::ic_sp()` |
+
+## The Turnbull estimate
+
+We simulate interval-censored data (assessments every 6 months) and estimate $S(t)$:
+
+```{r}
+set.seed(5)
+true_t <- rexp(200, rate = 0.1)
+grid   <- seq(0, 36, by = 6)
+L <- vapply(true_t, function(t) max(grid[grid <= t]), numeric(1))
+R <- vapply(true_t, function(t) min(grid[grid >  t]), numeric(1))
+R[is.infinite(R)] <- Inf
+R[true_t > 36] <- Inf
+L[true_t > 36] <- 36
+fit_np <- icenReg::ic_np(cbind(L, R))
+fit_np
+plot(fit_np)
+```
+
+**Interpretation.** Each event time is known only up to an interval $(L, R]$. The Turnbull
+NPMLE (eq. 9.2) puts mass only on intervals consistent with the data; the plot shows the
+estimated survivor function and its pointwise confidence limits.
+
+# Chapter 10 — Frailty models
+
+*Unobserved heterogeneity and clustered data* (§10.1–10.8).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Parametric frailty | `parfm::parfm()` | `survival::...` |
+| Semi-parametric (shared) frailty | `survival::coxph(..., frailty(...))` | `coxme::coxme()` |
+
+## Shared frailty for paired kidneys
+
+Kidneys from the same donor are correlated; `frailty(donor)` introduces a shared random
+effect (eq. 10.31):
+
+```{r}
+kfit <- survival::coxph(Surv(time, status) ~ age + diabetes + frailty(donor), data = kidney)
+summary(kfit)
+```
+
+**Interpretation.** The `frailty(donor)` term captures correlation between recipients of
+kidneys from the same donor; its estimated coefficient is the frailty variance (larger
+values mean stronger within-donor correlation). The fixed effects `age` and `diabetes`
+are interpreted as usual.
+
+# Chapter 11 — Non-proportional hazards and institutional comparisons
+
+*Stratification, restricted mean survival, and pseudo-values* (§11.1–11.4).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Stratified Cox | `survival::coxph(..., strata(...))` | — |
+| Restricted mean survival | `pseudo::pseudomean()` | `RISCA::rmst()` |
+
+## Non-proportional hazards and the restricted mean
+
+The gastric-cancer treatments have crossing hazards. We check proportional hazards and
+then compare restricted mean survival times via pseudo-values:
+
+```{r}
+cox.zph(survival::coxph(Surv(time, status) ~ treat, data = gastric))
+```
+
+```{r}
+pm <- pseudo::pseudomean(time = gastric$time, event = gastric$status, tmax = 400)
+summary(glm(pm ~ gastric$treat))
+```
+
+**Interpretation.** The `cox.zph` output shows evidence against proportional hazards, so a
+single hazard ratio is a time-average. The restricted mean survival time over $[0, 400]$
+days (eq. 11.3) is then a more interpretable summary; the `glm` on pseudo-values compares
+the two treatment means directly (its `treat` coefficient is the difference in RMST).
+
+# Chapter 12 — Competing risks
+
+*Cause-specific hazards, cumulative incidence, and Fine–Gray* (§12.1–12.6).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Cumulative incidence | `cmprsk::cuminc()` | `tidycmprsk::cuminc()`, `survival::survfit()` |
+| Cause-specific / Fine–Gray model | `cmprsk::crr()` | `tidycmprsk::crr()`, `riskRegression::FGR()` |
+
+## Cumulative incidence of graft-failure causes
+
+`liver` records the cause of graft failure in `cof` (0 = censored, 1–4 = causes). We
+estimate cumulative incidence functions by indication for transplant (`disease`):
+
+```{r}
+ci <- cmprsk::cuminc(liver$time, liver$cof, liver$disease)
+plot(ci, curvlab = c("PBC", "PSC", "Other"), xlab = "Time (days)")
+```
+
+A Fine–Gray model for one cause (eq. 12.11):
+
+```{r}
+cmprsk::crr(liver$time, liver$cof, cov1 = as.matrix(liver[c("gender", "age")]))
+```
+
+**Interpretation.** Each curve is the probability of graft failure from a given cause by
+time $t$ (the cumulative incidence function, eq. 12.4); the cause-specific curves add up
+to the total failure probability. The Fine–Gray model relates covariates to the
+subdistribution hazard of a specific cause.
+
+# Chapter 13 — Multiple events and event history modelling
+
+*Counting processes and recurrent events* (§13.1–13.5).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Recurrent events (AG, PWP) | `survival::coxph(..., cluster(...))` | `mstate::...`, `frailtypack::...` |
+
+## The Anderson–Gill model
+
+`survival::bladder` holds recurrent tumour episodes in counting-process form. The
+Anderson–Gill model treats each recurrence as an event with a common baseline hazard and
+a robust (cluster) variance:
+
+```{r}
+ag <- survival::coxph(Surv(stop, event) ~ rx + size + number + cluster(id), data = bladder)
+summary(ag)
+
+hr_rx  <- exp(coef(ag))[["rx"]]
+hr_num <- exp(coef(ag))[["number"]]
+```
+
+**Interpretation.** `rx` is the treatment effect (hazard ratio `r round(hr_rx, 2)`) and
+`number` the effect of prior recurrences (hazard ratio `r round(hr_num, 2)` per extra
+tumour). `cluster(id)` gives robust standard errors that account for within-patient
+correlation (eq. 13.5). The same study appears in the book's folder as "Recurrence of
+bladder cancer.dat" in a time-to-first-recurrence form.
+
+# Chapter 14 — Dependent censoring
+
+*Sensitivity analysis and inverse probability weighting* (§14.1–14.3).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Inverse probability of censoring weighting | `survival::coxph()` + `weights` | — |
+
+## Inverse probability of censoring weighting
+
+For patients on the liver-transplant waiting list, censoring (transplant) is likely
+dependent on the risk of death. We model the censoring process, form inverse probability
+weights, and refit the model for death:
+
+```{r}
+liver_wait$cens <- 1 - liver_wait$status   # censoring = transplant / removal
+cf <- survival::coxph(Surv(time, cens) ~ age + gender + bmi + ukeld, data = liver_wait)
+sc <- survival::survfit(cf, newdata = liver_wait)
+idx <- sapply(seq_len(nrow(liver_wait)), function(i) max(which(sc$time <= liver_wait$time[i])))
+w   <- 1 / sc$surv[idx]
+summary(w)
+
+wfit <- survival::coxph(Surv(time, status) ~ age + gender + bmi + ukeld,
+                        data = liver_wait, weights = w)
+summary(wfit)
+```
+
+**Interpretation.** Each weight is the inverse of the estimated probability of remaining
+uncensored (eq. 14.3). The very large weights seen in the summary belong to patients whose
+censoring probability was small, and are a warning that dependent censoring may be
+influencing the estimates — the same point made by the book's sensitivity analysis.
+
+# Chapter 15 — Sample size requirements for a survival study
+
+*Number of events and number of patients* (§15.1–15.3).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Number of events (Schoenfeld) | — | `powerSurvEpi::ssizeEpi()`, `gsDesign::...` |
+
+## Required number of deaths
+
+Schoenfeld's formula (eq. 15.1) is a one-liner in base R. For the chronic-active-hepatitis
+example, detecting a hazard ratio of 0.57 with 80% power at the two-sided 5% level:
+
+```{r}
+alpha <- 0.05; power <- 0.8; hr <- 0.57; p1 <- p2 <- 0.5
+d_deaths <- (qnorm(1 - alpha / 2) + qnorm(power))^2 / (p1 * p2 * log(hr)^2)
+round(d_deaths, 1)
+```
+
+**Interpretation.** About `r round(d_deaths)` deaths are required; the number of patients
+follows by dividing by the expected probability of death during follow-up (eq. 15.10).
+The CRAN package `powerSurvEpi` provides the same calculations with more options.
+
+# Chapter 16 — Bayesian survival analysis
+
+*Priors, posteriors, and MCMC* (§16.1–16.10).
+
+## Functions and packages
+
+| Task | Collett (Ch. 17) | Modern alternative |
+|---|---|---|
+| Bayesian parametric models (MCMC) | `rstanarm::stan_surv()` | `survstan::...`, `INLA` |
+| Conjugate analysis (exponential) | base R (closed form) | — |
+
+## A conjugate analysis of the exponential model
+
+For the IUD data under an exponential model with rate $\lambda$ and a vague gamma prior,
+the posterior is gamma with shape $r$ and rate $\sum t_i$ (the closed form of eq. 16.4):
+
+```{r}
+r     <- sum(iud$status)
+total <- sum(iud$time)
+a0 <- b0 <- 0.001                    # vague Gamma(a0, b0) prior
+a1 <- a0 + r; b1 <- b0 + total
+post_mean <- a1 / b1
+post_ci   <- qgamma(c(0.025, 0.975), a1, b1)
+c(mean = post_mean, lower = post_ci[1], upper = post_ci[2])
+```
+
+**Interpretation.** The posterior mean of $\lambda$ is about `r round(post_mean, 4)` per
+week (95% credible interval `r round(post_ci[1], 4)`–`r round(post_ci[2], 4)`), matching
+the maximum-likelihood estimate. For non-conjugate models, `rstanarm::stan_surv()` fits a
+Bayesian version via MCMC.
+
+---
+
+*Chapter 17 (Survival analysis with R) is the source of the function–package mappings
+used throughout; it is not repeated here.*

@@ -1,0 +1,670 @@
+---
+title: "Lecture 4: The Cox Proportional Hazards Model I"
+subtitle: "STA310 Survival Analysis · Collett Chapter 3"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+breast <- read.table(
+  file.path(data_dir, "Prognosis for women with breast cancer.dat"),
+  header = TRUE
+)
+breast$stain <- factor(
+  breast$stain,
+  levels = 1:2,
+  labels = c("Negative", "Positive")
+)
+myeloma <- read.table(
+  file.path(data_dir, "Survival of multiple myeloma patients.dat"),
+  header = TRUE
+)
+prostate <- read.table(
+  file.path(data_dir, "Comparison of two treatments for prostatic cancer.dat"),
+  header = TRUE
+)
+prostate$treatment <- factor(
+  prostate$treatment,
+  levels = 1:2,
+  labels = c("Placebo", "DES")
+)
+melanoma <- read.table(
+  file.path(data_dir, "Survival times of patients with melanoma .dat"),
+  header = TRUE
+)
+melanoma$treatment <- factor(
+  melanoma$treatment,
+  levels = 1:2,
+  labels = c("BCG", "C. parvum")
+)
+melanoma$age <- factor(
+  melanoma$age,
+  levels = 1:3,
+  labels = c("21-40", "41-60", "61+")
+)
+lung2 <- lung |>
+  mutate(sex = factor(sex, levels = 1:2, labels = c("Male", "Female")))
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. Recap and motivation
+2. The proportional hazards model
+3. The hazard ratio and its interpretation
+4. Partial likelihood
+5. Fitting with `coxph()` and reading the output
+6. Relation to the log-rank test
+7. Baseline hazard and predicted survival
+8. Presenting results; pitfalls
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+You can
+
+- write down the Cox model and interpret $\exp(\beta)$
+- explain how the partial likelihood works
+- fit and interpret a single-covariate Cox model in R
+- predict survival curves from a fitted model
+- avoid the usual misreadings of a hazard ratio
+:::
+:::
+
+## Recap
+
+- Lecture 2: Kaplan–Meier estimates $S(t)$ without distributional assumptions
+- Lecture 3: the log-rank test compares **groups**
+- Hazard: $h(t) = \lim_{\Delta t \to 0} P(t \le T < t + \Delta t \mid T \ge t)/\Delta t$
+
+**Today's question**: how do we describe the effect of a **covariate** (binary, categorical or continuous) on survival, still without specifying the shape of the hazard?
+
+# Why regression for survival data?
+
+## Limits of Kaplan–Meier and log-rank
+
+Kaplan–Meier curves and the log-rank test work for **a few groups**. They cannot
+
+- handle a **continuous** covariate (age, haemoglobin) without cutting it into groups
+- **quantify** the effect with an estimate and a confidence interval (the log-rank test gives only a p-value)
+- **adjust** for other covariates (confounding; precision gain in trials)
+
+. . .
+
+We want a regression model for the **hazard**. Linear regression of $T$ is not suitable: censoring, skewed times.
+
+## Example: HPA staining in breast cancer
+
+45 women with tumour stained for HPA (a lectin binding to metastasising cells). Time in months from surgery.
+
+```{r}
+#| fig-height: 4
+survfit2(Surv(time, status) ~ stain, data = breast) |>
+  ggsurvfit() +
+  add_risktable() +
+  labs(x = "Months since surgery", y = "Survival probability")
+```
+
+Positive staining seems worse. **By how much?** We need one number with an interval.
+
+# The proportional hazards model
+
+## The Cox model
+
+For individual $i$ with covariates $x_{1i}, \dots, x_{pi}$:
+
+$$h_i(t) = h_0(t)\,\exp(\beta_1 x_{1i} + \dots + \beta_p x_{pi}) = h_0(t)\, e^{\eta_i}$$
+
+- $h_0(t)$: **baseline hazard**, the hazard for $x = 0$; an **unspecified** function of time
+- $\eta_i = \beta' x_i$: **linear predictor** (no intercept: it is absorbed in $h_0$)
+- $\exp(\cdot)$ keeps the hazard positive
+- **Semi-parametric**: parametric in $x$, non-parametric in $t$
+
+## Two groups
+
+Binary $x$ (0 = reference, 1 = exposed):
+
+$$h(t \mid x = 0) = h_0(t), \qquad h(t \mid x = 1) = h_0(t)\, e^{\beta}$$
+
+The ratio of hazards is
+$$\frac{h(t \mid x=1)}{h(t \mid x=0)} = e^{\beta} = \psi \quad \text{for all } t$$
+
+- $\psi$ is the **hazard ratio** (HR); it does **not depend on time**. This is the *proportional hazards* (PH) assumption.
+- $\beta = \log \psi$ is the **log hazard ratio**; $\beta = 0 \Leftrightarrow$ no effect.
+
+## Proportional hazards, visualised
+
+```{r}
+#| echo: false
+#| fig-height: 4.3
+tt <- seq(0.05, 5, length.out = 200)
+h0 <- function(t) 0.4 * 1.5 * t^0.5 # Weibull baseline, shape 1.5
+H0 <- function(t) 0.4 * t^1.5
+d <- crossing(t = tt, group = c("x = 0", "x = 1")) |>
+  mutate(
+    HR = ifelse(group == "x = 0", 1, 2),
+    hazard = HR * h0(t),
+    logH = log(HR * H0(t)),
+    surv = exp(-HR * H0(t))
+  )
+p1 <- ggplot(d, aes(t, hazard, colour = group)) +
+  geom_line(linewidth = 1.2) +
+  labs(x = "Time", y = "h(t)", title = "Hazards", colour = NULL)
+p2 <- ggplot(d, aes(log(t), logH, colour = group)) +
+  geom_line(linewidth = 1.2) +
+  labs(
+    x = "log t",
+    y = "log H(t)",
+    title = "Log cumulative hazards",
+    colour = NULL
+  )
+p3 <- ggplot(d, aes(t, surv, colour = group)) +
+  geom_line(linewidth = 1.2) +
+  labs(x = "Time", y = "S(t)", title = "Survival", colour = NULL)
+patchwork_ok <- requireNamespace("patchwork", quietly = TRUE)
+if (patchwork_ok) {
+  patchwork::wrap_plots(p1, p2, p3, guides = "collect")
+} else {
+  print(p1)
+}
+```
+
+HR = 2. Hazards: constant **ratio**. Log cumulative hazards: **parallel**, vertical distance $\beta = \log 2$. Survival curves: never cross, but are *not* proportional.
+
+## The survival function under PH
+
+Since $H_i(t) = e^{\eta_i} H_0(t)$,
+
+$$S_i(t) = \exp\{-H_i(t)\} = \exp\{-e^{\eta_i} H_0(t)\} = S_0(t)^{\exp(\eta_i)}$$
+
+- HR $> 1$: $S_i(t) < S_0(t)$ (worse survival)
+- HR $< 1$: $S_i(t) > S_0(t)$ (better survival)
+
+. . .
+
+$$\log\{-\log S_i(t)\} = \eta_i + \log H_0(t)$$
+
+This is why parallel **log-log** curves are used as a graphical check of PH (lecture 6).
+
+# The hazard ratio
+
+## Interpretation: binary covariate
+
+$\hat\beta$ for $x = 1$ vs $x = 0$; HR $= e^{\hat\beta}$.
+
+- HR $= 1.5$: at any time, among those still event-free, the hazard is **50% higher** in the exposed group
+- HR $= 0.5$: the hazard is **halved**
+- 95% CI for the HR: $\exp\{\hat\beta \pm 1.96\,\mathrm{se}(\hat\beta)\}$ (Collett 3.4.1), symmetric on the log scale, not on the HR scale
+- Test $H_0\!: \beta = 0$ with the **Wald** statistic $z = \hat\beta/\mathrm{se}(\hat\beta)$
+
+## Interpretation: continuous covariate
+
+One extra unit of $x$ multiplies the hazard by $e^{\beta}$, for any starting value:
+
+$$\frac{h(t \mid x + 1)}{h(t \mid x)} = e^{\beta}, \qquad \frac{h(t \mid x + c)}{h(t \mid x)} = e^{c\beta} = (e^{\beta})^c$$
+
+- The effect is **log-linear**: the HR between 10 and 11 equals that between 20 and 21
+- The scale matters: HR per year of age, per 10 years, or per SD?
+- Rescale to a clinically meaningful step: $\widehat{\mathrm{HR}}_c = e^{c\hat\beta}$ with CI $\exp\{c(\hat\beta \pm 1.96\,\mathrm{se})\}$
+- Per-SD HRs make different covariates **comparable** (but depend on the sample)
+
+## Interpretation: categorical covariate
+
+A factor with $k$ levels gives $k - 1$ indicator variables (dummy variables) $z_2, \dots, z_k$:
+
+$$h(t) = h_0(t)\exp(\beta_2 z_2 + \dots + \beta_k z_k)$$
+
+- $e^{\beta_j}$ = HR of level $j$ **relative to the reference level**
+- HR between two non-reference levels $j, l$: $e^{\beta_j - \beta_l}$
+- The choice of reference changes the numbers, not the model
+- Choose a **large, clinically natural** reference group
+
+## What a hazard ratio is not {.smaller}
+
+::: {.callout-warning}
+**Hazard ratio $\ne$ risk ratio.** HR compares *instantaneous rates* among those still at risk; it is not a ratio of probabilities of dying by a given time.
+:::
+
+- HR $= 0.5$ does **not** mean "half as likely to die", nor "survive twice as long"
+- Over a long follow-up, with HR $= 0.5$: $S_1(t) = S_0(t)^{0.5}$. If $S_0(t) = 0.2$ then $S_1(t) = 0.45$, so risks of death are $0.80$ and $0.55$, a risk ratio of $0.69$
+- With a rare event and short follow-up, HR $\approx$ risk ratio
+- "Per unit" depends on the **units**: HR for haemoglobin in g/dl is not HR in g/l
+- A significant HR says nothing about the **size** of the absolute difference in survival
+
+# Partial likelihood
+
+## Idea: who has the event, given that someone does?
+
+Order the distinct event times $t_{(1)} < \dots < t_{(r)}$. Let $R(t_{(j)})$ be the **risk set**: patients still under observation just before $t_{(j)}$.
+
+Given that **one** event occurs at $t_{(j)}$, the probability that it is patient $i$ is
+
+$$\frac{h_i(t_{(j)})}{\sum_{l \in R(t_{(j)})} h_l(t_{(j)})} = \frac{h_0(t_{(j)})\, e^{\eta_i}}{\sum_{l \in R} h_0(t_{(j)})\, e^{\eta_l}} = \frac{e^{\eta_i}}{\sum_{l \in R(t_{(j)})} e^{\eta_l}}$$
+
+. . .
+
+**$h_0(t)$ cancels.** We never need to specify it.
+
+## The partial likelihood
+
+$$L(\beta) = \prod_{j=1}^{r} \frac{\exp(\beta' x_{(j)})}{\sum_{l \in R(t_{(j)})} \exp(\beta' x_l)}$$
+
+where $x_{(j)}$ is the covariate vector of the patient with the event at $t_{(j)}$.
+
+- One factor per **event**; censored patients contribute only by sitting in risk sets
+- Only the **order** of event times matters, not their values
+- Maximise $\log L(\beta)$ numerically (Newton–Raphson, Collett 3.3.3); $\hat\beta$ is approximately normal with variance from the information
+- Used like an ordinary likelihood for inference (Wald, score, likelihood-ratio tests)
+
+## Worked example: five patients
+
+Treatment $x = 1$ (new) or $0$ (control). `+` = censored.
+
+```{r}
+toy <- tibble(
+  id = 1:5,
+  time = c(3, 5, 6, 8, 11),
+  status = c(1, 1, 0, 1, 0),
+  x = c(1, 0, 1, 0, 1)
+)
+toy
+```
+
+At $t = 3$ all five are at risk. Patient 1 ($x = 1$) fails, so the factor is
+
+$$\frac{e^{\beta}}{e^{\beta} + e^{0} + e^{\beta} + e^{0} + e^{\beta}} = \frac{e^{\beta}}{3e^{\beta} + 2}$$
+
+## Worked example: all three factors
+
+| Event time | Risk set | Who fails | Factor |
+|---|---|---|---|
+| 3 | 1, 2, 3, 4, 5 | 1 ($x = 1$) | $\dfrac{e^{\beta}}{3e^{\beta} + 2}$ |
+| 5 | 2, 3, 4, 5 | 2 ($x = 0$) | $\dfrac{1}{2e^{\beta} + 2}$ |
+| 8 | 4, 5 | 4 ($x = 0$) | $\dfrac{1}{e^{\beta} + 1}$ |
+
+Patient 3 (censored at 6) is in the risk sets at 3 and 5, not at 8.
+
+$$L(\beta) = \frac{e^{\beta}}{3e^{\beta} + 2} \cdot \frac{1}{2e^{\beta} + 2} \cdot \frac{1}{e^{\beta} + 1}$$
+
+## Worked example: maximise in R
+
+```{r}
+#| output-location: column
+#| fig-height: 5
+logL <- function(b) {
+  log(exp(b) / (3 * exp(b) + 2)) +
+    log(1 / (2 * exp(b) + 2)) +
+    log(1 / (exp(b) + 1))
+}
+opt <- optimize(logL, c(-5, 5), maximum = TRUE)
+ggplot(data.frame(b = c(-4, 3)), aes(b)) +
+  stat_function(fun = Vectorize(logL), linewidth = 1.2) +
+  geom_vline(xintercept = opt$maximum, lty = 2) +
+  labs(x = expression(beta), y = "log partial likelihood")
+```
+
+```{r}
+fit_toy <- coxph(Surv(time, status) ~ x, data = toy)
+c(by_hand = opt$maximum, coxph = unname(coef(fit_toy)))
+```
+
+`coxph()` gives the same $\hat\beta$ as the hand-written partial likelihood (HR $= `r round(exp(coef(fit_toy)), 2)`$, with only 3 events, hardly precise).
+
+## Ties
+
+If several patients fail at the same time the risk-set factor must be adjusted. Three approximations (Collett 3.3.2):
+
+- **Breslow**: simplest; all tied events share the full risk set. Fine with few ties
+- **Efron**: better approximation with many ties; **the default in R** (`ties = "efron"`)
+- **Exact** (discrete): most demanding computationally
+
+```{r}
+#| eval: false
+coxph(Surv(time, status) ~ x, data = d, ties = "breslow") # e.g. to match older software
+```
+
+Check which method is used when comparing with SAS (default: Breslow) or a textbook.
+
+## Why use partial likelihood?
+
+- No assumption on $h_0(t)$: the model fits many diseases without choosing a distribution
+- Almost no loss of efficiency compared with a correctly specified parametric model
+- The covariate effect, $\beta$, is what usually interests the clinician
+- Cost: $h_0(t)$ must be estimated afterwards if we want absolute risks or survival curves
+
+# Fitting with `coxph()`
+
+## Example 1: HPA staining, single binary covariate
+
+```{r}
+fit_hpa <- coxph(Surv(time, status) ~ stain, data = breast)
+fit_hpa
+```
+
+## `summary()`
+
+```{r}
+summary(fit_hpa)
+```
+
+## Reading the output
+
+- `coef` $= \hat\beta = `r round(coef(fit_hpa), 3)`$, `se(coef)` $= `r round(summary(fit_hpa)$coefficients[, "se(coef)"], 3)`$, $z = `r round(summary(fit_hpa)$coefficients[, "z"], 2)`$
+- `exp(coef)` $=$ HR $= `r round(exp(coef(fit_hpa)), 2)`$ for positive vs negative staining; 95% CI `r round(summary(fit_hpa)$conf.int[, "lower .95"], 2)` to `r round(summary(fit_hpa)$conf.int[, "upper .95"], 2)`
+- `exp(-coef)` is the HR the other way round
+- Interpretation: at any time, a woman with positive staining has an estimated hazard `r round(exp(coef(fit_hpa)), 1)` times that of a woman with negative staining. The CI is wide (small study: `r fit_hpa$nevent` events) and **includes 1**: the data are compatible with no effect, and the size of any effect is very uncertain.
+
+## The three overall tests {.smaller}
+
+At the bottom of `summary()`:
+
+| Test | Based on | Comment |
+|---|---|---|
+| Likelihood ratio | $2\{\log L(\hat\beta) - \log L(0)\}$ | Preferred, esp. in small samples |
+| Wald | $\hat\beta' \hat I\, \hat\beta$ | Equals $z^2$ with one covariate |
+| Score (log-rank) | Slope of $\log L$ at $\beta = 0$ | Needs no fitting |
+
+All test $H_0\!: \beta = 0$ and are asymptotically $\chi^2_p$. With one covariate they are `r round(summary(fit_hpa)$logtest[["test"]], 2)` (LR), `r round(summary(fit_hpa)$waldtest[["test"]], 2)` (Wald) and `r round(summary(fit_hpa)$sctest[["test"]], 2)` (score) for the HPA example.
+
+. . .
+
+**Concordance** (C-index): probability that, of two comparable patients, the one with the higher linear predictor fails first. Here `r round(summary(fit_hpa)$concordance[1], 2)`; 0.5 = no discrimination, 1 = perfect. See Collett 3.12.
+
+## Relation to the log-rank test
+
+With a single binary covariate, the **score test** from the Cox model is (essentially) the **log-rank test**; they coincide exactly without ties.
+
+```{r}
+lr <- survdiff(Surv(time, status) ~ stain, data = breast)
+c(logrank = lr$chisq, cox_score = summary(fit_hpa)$sctest[["test"]])
+```
+
+- The log-rank test answers: *is there a difference?*
+- The Cox model also answers: *how large is it?* (HR with CI), and extends to continuous and several covariates
+- With tied event times the two statistics are not identical: the Cox score test depends on the tie method (here Efron), so the values differ slightly
+
+## Example 2: prostate cancer, DES vs placebo
+
+38 patients; treatment 1 = placebo, 2 = DES. Event: death from prostate cancer, time in months.
+
+```{r}
+fit_pr <- coxph(Surv(time, status) ~ treatment, data = prostate)
+broom::tidy(fit_pr, exponentiate = TRUE, conf.int = TRUE) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+- HR for DES vs placebo `r round(exp(coef(fit_pr)), 2)` (95% CI `r round(exp(confint(fit_pr)[1]), 2)` to `r round(exp(confint(fit_pr)[2]), 2)`)
+- Only `r fit_pr$nevent` deaths: Wald $p = `r round(summary(fit_pr)$coefficients[, "Pr(>|z|)"], 3)`$ but LR $p = `r round(summary(fit_pr)$logtest[["pvalue"]], 3)`$. With few events the tests can disagree; **report which one**.
+- Unadjusted: the trial also recorded age, Hb, size and Gleason index (lecture 5)
+
+## Example 3: continuous covariates in myeloma
+
+36 deaths among 48 patients. Single-variable models for haemoglobin (g/dl) and blood urea nitrogen (mg/100 ml):
+
+```{r}
+fit_hb <- coxph(Surv(time, status) ~ hb, data = myeloma)
+fit_bun <- coxph(Surv(time, status) ~ bun, data = myeloma)
+bind_rows(
+  hb = broom::tidy(fit_hb, exponentiate = TRUE, conf.int = TRUE),
+  bun = broom::tidy(fit_bun, exponentiate = TRUE, conf.int = TRUE)
+) |>
+  select(
+    term,
+    HR = estimate,
+    se = std.error,
+    lower = conf.low,
+    upper = conf.high,
+    p = p.value
+  ) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+- Hb: each additional g/dl is associated with a hazard `r round(exp(coef(fit_hb)), 2)` times as large (a `r round(100 * (1 - exp(coef(fit_hb))))`% reduction)
+- BUN: HR per mg/100 ml is `r round(exp(coef(fit_bun)), 3)`, which looks tiny but is **per unit**
+
+## Changing the scale
+
+```{r}
+sd_hb <- sd(myeloma$hb)
+sd_bun <- sd(myeloma$bun)
+tibble(
+  covariate = c(
+    "hb, per 1 g/dl",
+    "hb, per SD",
+    "bun, per 1 unit",
+    "bun, per 10 units",
+    "bun, per SD"
+  ),
+  HR = exp(c(
+    coef(fit_hb),
+    coef(fit_hb) * sd_hb,
+    coef(fit_bun),
+    10 * coef(fit_bun),
+    coef(fit_bun) * sd_bun
+  ))
+) |>
+  mutate(HR = round(HR, 2))
+```
+
+- SD of hb = `r round(sd_hb, 1)` g/dl, SD of BUN = `r round(sd_bun, 1)`
+- Per SD, the two covariates are of a more comparable size; the 95% CI is rescaled the same way
+- Alternatively `coxph(Surv(time, status) ~ I(bun / 10), ...)` gives the HR per 10 units directly
+
+## Example 4: categorical covariate, melanoma by age group
+
+Age group (21–40, 41–60, 61+) in 31 patients (10 deaths). Collett: Table 2.9.
+
+```{r}
+fit_mel <- coxph(Surv(time, status) ~ age, data = melanoma)
+summary(fit_mel)$coefficients |> round(3)
+```
+
+- Two indicator variables; reference is 21–40
+- HR 41–60 vs 21–40: `r round(exp(coef(fit_mel))[1], 2)`; HR 61+ vs 21–40: `r round(exp(coef(fit_mel))[2], 2)`
+- Joint test of age group: **2 df** likelihood-ratio test, $p = `r round(summary(fit_mel)$logtest[["pvalue"]], 2)`$ (not the individual Wald p-values)
+- Very few events, wide intervals: no firm conclusions
+
+## Example 5: lung cancer data (`survival::lung`), sex
+
+228 patients with advanced lung cancer, time in days. `sex`: 1 = male, 2 = female.
+
+```{r}
+fit_lung <- coxph(Surv(time, status == 2) ~ sex, data = lung2)
+summary(fit_lung)
+```
+
+Female vs male HR `r round(exp(coef(fit_lung)), 2)`: the hazard of death for women is estimated to be `r round(100 * (1 - exp(coef(fit_lung))))`% lower than for men.
+
+# Presenting results
+
+## `gtsummary::tbl_regression()`
+
+```{r}
+#| message: false
+library(gtsummary)
+coxph(Surv(time, status == 2) ~ sex + age, data = lung2) |>
+  tbl_regression(exponentiate = TRUE)
+```
+
+Publication-style table with HR, 95% CI and p-value (here a first look at a model with two covariates).
+
+## `broom::tidy()` and a forest-style plot
+
+Single-variable models for several covariates from `lung`, each HR per its own unit:
+
+```{r}
+#| fig-height: 3.8
+vars <- c("age", "sex", "ph.ecog", "wt.loss")
+res <- map_dfr(vars, \(v) {
+  f <- coxph(reformulate(v, "Surv(time, status == 2)"), data = lung2)
+  broom::tidy(f, exponentiate = TRUE, conf.int = TRUE) |> mutate(model = v)
+})
+ggplot(res, aes(estimate, term)) +
+  geom_vline(xintercept = 1, lty = 2) +
+  geom_pointrange(aes(xmin = conf.low, xmax = conf.high)) +
+  scale_x_log10() +
+  labs(x = "Hazard ratio (log scale), unadjusted", y = NULL)
+```
+
+Use a **log** axis with the reference line at 1. Say what the units are (age: per year, `sex`: female vs male, `ph.ecog`: per ECOG category, `wt.loss`: per lb).
+
+# Baseline hazard and predicted survival
+
+## Estimating $h_0(t)$ and $S_0(t)$
+
+Partial likelihood gives $\hat\beta$ only. Afterwards, the **baseline cumulative hazard** is estimated by a Breslow-type estimator
+
+$$\hat H_0(t) = \sum_{t_{(j)} \le t} \frac{d_j}{\sum_{l \in R(t_{(j)})} \exp(\hat\beta' x_l)}$$
+
+and $\hat S_i(t) = \exp\{-\hat H_0(t)\, e^{\hat\beta' x_i}\} = \hat S_0(t)^{\exp(\hat\beta' x_i)}$.
+
+With no covariates this reduces to the Nelson–Aalen estimator (lecture 2).
+
+```{r}
+bh <- basehaz(fit_hpa, centered = FALSE)
+head(bh, 4)
+```
+
+`basehaz(centered = FALSE)` is the cumulative hazard for $x = 0$; by default `centered = TRUE` refers to the mean covariate value.
+
+## Predicted survival curves with `survfit(coxph)`
+
+```{r}
+#| fig-height: 4.2
+nd <- data.frame(
+  stain = factor(c("Negative", "Positive"), levels = levels(breast$stain))
+)
+sf <- survfit(fit_hpa, newdata = nd)
+tibble(
+  time = rep(sf$time, 2),
+  surv = c(sf$surv),
+  stain = rep(nd$stain, each = length(sf$time))
+) |>
+  ggplot(aes(time, surv, colour = stain)) +
+  geom_step(linewidth = 1.1) +
+  labs(
+    x = "Months since surgery",
+    y = "Model-based survival",
+    colour = "HPA staining"
+  ) +
+  ylim(0, 1)
+```
+
+## Model-based vs Kaplan–Meier
+
+```{r}
+#| fig-height: 4.2
+km <- survfit(Surv(time, status) ~ stain, data = breast)
+plot(
+  km,
+  col = c("steelblue", "firebrick"),
+  lwd = 2,
+  xlab = "Months since surgery",
+  ylab = "Survival probability"
+)
+lines(sf, col = c("steelblue", "firebrick"), lty = 2, lwd = 2, conf.int = FALSE)
+legend(
+  "topright",
+  c("KM, negative", "KM, positive", "Cox, negative", "Cox, positive"),
+  col = c("steelblue", "firebrick"),
+  lty = c(1, 1, 2, 2),
+  lwd = 2,
+  bty = "n"
+)
+```
+
+Good agreement supports the model; the Cox curves are **smoother in the sense of being forced to be proportional**. Large differences would suggest that PH does not hold (lecture 6).
+
+## Continuous covariate: predicted curves for the myeloma data
+
+```{r}
+#| fig-height: 4.2
+nd <- data.frame(bun = c(10, 25, 60))
+sf_b <- survfit(fit_bun, newdata = nd)
+tibble(
+  time = rep(sf_b$time, 3),
+  surv = c(sf_b$surv),
+  bun = factor(rep(nd$bun, each = length(sf_b$time)))
+) |>
+  ggplot(aes(time, surv, colour = bun)) +
+  geom_step(linewidth = 1.1) +
+  labs(x = "Months", y = "Predicted survival", colour = "BUN") +
+  ylim(0, 1)
+```
+
+Predicted curves for chosen values. They never cross (PH) and depend on the **whole** estimated $\hat H_0(t)$.
+
+# Pitfalls and summary
+
+## Common interpretation errors
+
+- "HR = 0.5 means half the probability of death": no, **half the hazard rate**
+- Quoting an HR **per unit** without saying the unit; comparing HRs of covariates with different scales
+- Interpreting $\exp(\text{coef})$ for a factor without naming the **reference level**
+- Treating a non-significant HR as "no effect" (look at the CI)
+- Ignoring that PH is an **assumption**; one HR cannot describe crossing hazards (e.g. the gastric cancer trial)
+- Reading the HR as causal in observational data
+- Reporting the Wald p-value alone with very few events: also give the LR test
+- Reading the intercept: **there is none** (it is part of $h_0$)
+
+## Multivariable models: a preview
+
+$$h(t) = h_0(t)\exp(\beta_1 x_1 + \beta_2 x_2 + \dots)$$
+
+- $e^{\beta_1}$ is the HR for $x_1$ **holding the other covariates fixed** (adjusted HR)
+- Adjusted and unadjusted HRs can differ (confounding)
+- Comparing models by likelihood-ratio tests and model building: **lecture 5** (Collett 3.5–3.6); checking PH and other assumptions: **lectures 6–7**
+
+## Quiz
+
+A Cox model gives $\hat\beta = 0.405$ for a drug vs placebo (se 0.2).
+
+1. What is the HR and its 95% CI?
+2. Interpret in one sentence.
+3. Does the CI support an effect at the 5% level?
+
+. . .
+
+```{r}
+b <- 0.405
+se <- 0.2
+round(exp(c(HR = b, lower = b - 1.96 * se, upper = b + 1.96 * se)), 2)
+```
+
+The hazard is about 1.5 times higher on the drug (CI roughly 1.0 to 2.2). The CI just includes values near 1: borderline.
+
+## Exercise (in class, 10 minutes)
+
+Use the myeloma data (`hb`, `bun`, `sex`, `age`; `sex` is coded 1 and 2).
+
+1. Fit a Cox model with `sex` as a factor. Give the HR, a 95% CI and interpret it.
+2. Fit a model with `age`. Give the HR per 10 years with CI.
+3. Compare the score test of the sex model with `survdiff()`.
+4. Plot the predicted survival for a 60-year-old and a 70-year-old.
+
+```{r}
+#| eval: false
+coxph(Surv(time, status) ~ factor(sex), data = myeloma)
+coxph(Surv(time, status) ~ I(age / 10), data = myeloma)
+```
+
+## Take-home messages
+
+- Cox model: $h(t \mid x) = h_0(t)\exp(\beta' x)$, $h_0$ left **unspecified**
+- $e^{\beta}$ is the **hazard ratio**, constant in time (proportional hazards); it is **not** a risk ratio
+- Check the **scale** of a continuous covariate and the **reference** of a factor
+- **Partial likelihood**: for each event, $\exp(\eta_i)/\sum_{R}\exp(\eta_j)$; ties handled by Efron (R default) or Breslow
+- `coxph()`, `summary()`, `tidy()`/`tbl_regression()`; score test with one binary covariate = log-rank
+- Survival curves require an estimate of $H_0(t)$: `survfit(fit, newdata = ...)`
+
+**Next lecture**: Cox II: multivariable models, comparing models with likelihood-ratio tests, model building and stratification.
+
+**Reading**: Collett, Chapter 3, Sections 3.1–3.4 (and 3.9–3.10 for interpretation and baseline functions).

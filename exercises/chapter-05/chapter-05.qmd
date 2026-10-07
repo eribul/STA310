@@ -1,0 +1,364 @@
+---
+title: "Chapter 5: Parametric regression models — Exercises"
+subtitle: "STA310 Survival Analysis (Master's in Applied Biostatistics)"
+lang: en
+solutions: false
+---
+
+Chapter 5 introduces models that assume a specific probability distribution for the
+survival times. These exercises cover the common distributions (exponential, Weibull,
+log-logistic, lognormal, Gompertz), how to assess their suitability, the Weibull
+proportional hazards model, the accelerated failure time model, and the proportional
+odds model.
+
+## Distributions for survival times  (Book §5.1)
+
+### The Weibull distribution
+
+*Type: Concept & notation*
+
+The Weibull hazard function is $h(t) = \lambda\gamma t^{\gamma-1}$ for $\lambda, \gamma > 0$.
+
+(a) Which parameter is the *shape* parameter and which is the *scale* parameter, and
+    how does each affect the hazard function?
+(b) What special case is obtained when $\gamma = 1$?
+(c) State, in words, the shape of the hazard function for $\gamma < 1$ and for
+    $\gamma > 1$. What limitation of the Weibull hazard does this reveal?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $\gamma$ is the shape parameter and $\lambda$ the scale parameter. $\gamma$
+    governs whether the hazard increases or decreases, while $\lambda$ rescales the
+    time axis.
+(b) When $\gamma = 1$ the hazard is constant, $h(t) = \lambda$, and the survival
+    times follow an exponential distribution.
+(c) For $\gamma < 1$ the hazard decreases monotonically; for $\gamma > 1$ it
+    increases monotonically. The Weibull hazard is therefore always monotonic — it
+    cannot change direction (e.g. rise and then fall).
+:::
+
+### Hazard shapes of the common distributions
+
+*Type: Method selection*
+
+Match each situation to the most appropriate distribution, and justify briefly:
+exponential, Weibull, log-logistic, lognormal, Gompertz.
+
+(a) The risk of the event is believed to be roughly constant over the follow-up
+    period.
+(b) The risk is expected to rise steadily over time (e.g. mortality increasing with
+    age).
+(c) The risk is expected to rise shortly after an intervention and then fall (e.g.
+    death following a heart transplant, as the patient recovers).
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Exponential — constant hazard, $h(t) = \lambda$.
+(b) Weibull with $\gamma > 1$ (monotonically increasing), or the Gompertz
+    distribution, whose log-hazard is linear in time and is common in demography.
+(c) Log-logistic with $\kappa > 1$ (unimodal hazard), or the lognormal distribution,
+    whose hazard rises to a maximum and then declines to zero.
+:::
+
+## Choosing and fitting a parametric model  (Book §5.2–5.4)
+
+### The log-cumulative hazard plot
+
+*Type: Interpret figure*
+
+*Builds on: Chapter 2*
+
+For a Weibull distribution, $\log\{-\log S(t)\} = \log\lambda + \gamma\log t$.
+
+(a) How is the plot constructed, and what does a straight line indicate?
+(b) What do the slope and intercept of the line estimate?
+(c) You obtain a straight line with slope close to 1. What does this suggest, and
+    what model would you then consider?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Plot $\log\{-\log\hat S(t)\}$ — the log-cumulative hazard, using the
+    Kaplan–Meier estimate $\hat S(t)$ — against $\log t$. A straight line indicates
+    the Weibull model is plausible.
+(b) From $\log\{-\log S(t)\} = \log\lambda + \gamma\log t$, the slope estimates the
+    shape parameter $\gamma$ and the intercept estimates $\log\lambda$ (the scale
+    parameter).
+(c) A slope near 1 means $\gamma \approx 1$, so the hazard is essentially constant —
+    the exponential distribution (a special case of the Weibull) may be adequate.
+:::
+
+### Fitting the exponential distribution
+
+*Type: Concept & notation*
+
+For a single sample from an exponential distribution with $r$ events and total
+follow-up time $\sum_i t_i$, the maximum likelihood estimate is
+$\hat\lambda = r/\sum_i t_i$.
+
+In a study of 18 women using an intrauterine device, 9 discontinued use and the
+total observed time was 1046 days.
+
+(a) Compute $\hat\lambda$, and state the estimated hazard and survivor functions.
+(b) Compute the estimated median discontinuation time, and the estimated 90th
+    percentile.
+(c) The standard error of $\hat\lambda$ is $\hat\lambda/\sqrt r$. Explain in words
+    why the precision of $\hat\lambda$ depends on the number of events, not the
+    number of individuals.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $\hat\lambda = 9/1046 = 0.0086$ per day; $\hat h(t) = 0.0086$ and
+    $\hat S(t) = \exp(-0.0086t)$.
+(b) Median $= \hat\lambda^{-1}\log 2 = 80.6$ days. The 90th percentile is
+    $\hat\lambda^{-1}\log 10 = 267.6$ days.
+(c) Each event carries the information about the hazard rate (censored times
+    contribute exposure but no event), so the variance of $\hat\lambda$ is
+    $\lambda^2/r$: it depends only on the number of events $r$, not on $n$.
+:::
+
+### Choosing between parametric and Cox models
+
+*Type: Model comparison*
+
+(a) State one advantage and one disadvantage of a Weibull proportional hazards
+    model relative to the Cox model.
+(b) When a Weibull model is a reasonable description of the data, what happens to
+    the standard errors of the estimated coefficients compared with the Cox model?
+(c) In practice, how might you decide between the two when there is little to
+    choose in goodness of fit?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Advantage: if the distributional assumption holds, estimates are more precise
+    (and the model yields smooth estimates of the hazard, survivor function and
+    percentiles). Disadvantage: it imposes a specific (monotonic) form on the
+    baseline hazard, which may be wrong; the Cox model leaves it unspecified.
+(b) The standard errors are generally smaller (the model is more efficient),
+    because it exploits the distributional assumption.
+(c) Compare the standard errors of the estimated coefficients: if the Weibull model
+    gives substantially smaller standard errors, prefer it for efficiency; if they
+    are similar, prefer the Cox model for its less restrictive assumptions.
+:::
+
+## The Weibull proportional hazards model  (Book §5.5–5.9)
+
+### The Weibull proportional hazards model
+
+*Type: Concept & notation*
+
+*Builds on: Chapter 3*
+
+The Weibull proportional hazards model is
+$h_i(t) = \exp(\beta_1 x_{1i} + \cdots + \beta_p x_{pi})\,\lambda\gamma t^{\gamma-1}$.
+
+(a) What is the baseline hazard function, and what distribution do the survival
+    times follow?
+(b) How do the explanatory variables affect the distribution of survival times —
+    through the scale or the shape parameter?
+(c) How are the $\beta$-coefficients interpreted, and what is the "proportional
+    hazards property" of the Weibull distribution?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The baseline hazard is $\lambda\gamma t^{\gamma-1}$, the hazard of a Weibull
+    $W(\lambda, \gamma)$ distribution — the survival times follow a Weibull
+    distribution.
+(b) They act multiplicatively on the scale parameter: the $i$th individual has a
+    Weibull distribution with scale $\lambda\exp(\beta'x_i)$ and the *same* shape
+    $\gamma$. The shape parameter is common to all individuals.
+(c) Each $\beta_j$ is a log hazard ratio: $\exp(\beta_j)$ is the multiplicative
+    effect on the hazard. The Weibull has the proportional hazards property because
+    scaling the hazard $\psi h_0(t)$ is again a Weibull hazard with the same shape
+    $\gamma$.
+:::
+
+### Interpreting Weibull output
+
+*Type: Interpret R output*
+
+A Weibull model is fitted (in its log-linear form,
+$\log T_i = \mu + \alpha x_i + \sigma\epsilon_i$) to the breast cancer data, where
+$x = 1$ for positively stained and $0$ for negatively stained tumours. The output
+gives $\hat\alpha = -0.997$ and $\hat\sigma = 1.067$ (reported as `Scale`).
+
+(a) What is the estimated Weibull shape parameter $\gamma$?
+(b) What does $\exp(\hat\alpha) = \exp(-0.997) \approx 0.37$ mean, in words?
+(c) Using $\beta = -\alpha/\sigma$, compute the estimated log hazard ratio and
+    hazard ratio for positive versus negative staining.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $\gamma = 1/\hat\sigma = 1/1.067 = 0.937$.
+(b) It is the *time ratio*: the survival time of a positively stained woman is about
+    0.37 times (roughly one third) that of a negatively stained woman — positive
+    staining accelerates death.
+(c) $\hat\beta = -\hat\alpha/\hat\sigma = 0.997/1.067 = 0.934$, so the hazard ratio
+    is $\exp(0.934) = 2.55$. The hazard of death for a positively stained woman is
+    about 2.5 times that of a negatively stained woman. (This agrees with the time
+    ratio: under Weibull the hazard ratio is $\phi^{-\gamma} = 0.37^{-0.937}$.)
+:::
+
+## The accelerated failure time model  (Book §5.10–5.13)
+
+### The time ratio and the accelerated failure time model
+
+*Type: Concept & notation*
+
+For two groups the accelerated failure time (AFT) model is
+$S_N(t) = S_S(t/\phi)$.
+
+(a) What is the parameter $\phi$ called, and what does $\phi < 1$ mean in terms of
+    the time to the event?
+(b) Relate $\phi$ to the median survival times in the two groups.
+(c) If $\phi = e^{\alpha}$ and $\hat\alpha = -0.4$, interpret the effect of the new
+    treatment on survival time.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $\phi$ is the time ratio. $\phi < 1$ means the event happens *sooner* on the new
+    treatment (the disease process is accelerated): the survival time is a fraction
+    $\phi$ of that on the standard treatment.
+(b) Under the AFT model the median survival time on the new treatment is $\phi$
+    times that on the standard treatment, $t_N(50) = \phi\, t_S(50)$ — and the same
+    holds for every percentile.
+(c) $\phi = e^{-0.4} = 0.67$: the survival time on the new treatment is about 67% of
+    that on the standard treatment, so the new treatment shortens survival (it is
+    not beneficial).
+:::
+
+### Accelerated failure time versus proportional hazards
+
+*Type: Model comparison*
+
+(a) In words, how do the AFT and proportional hazards models differ in the way
+    covariates act?
+(b) Which single distribution possesses *both* the proportional hazards and the
+    accelerated failure time properties, and what does this imply?
+(c) In what situations might an AFT model be preferable to a proportional hazards
+    model?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Under proportional hazards, covariates act multiplicatively on the *hazard* at
+    each time; under AFT, covariates act multiplicatively on the *time scale*,
+    speeding up or slowing down the whole process. A time ratio is very intuitive
+    ("treatment doubles median survival").
+(b) The Weibull distribution has both properties. As a result, the same Weibull
+    model can be interpreted either as a PH model (via hazard ratios) or as an AFT
+    model (via time ratios); the coefficients are related by $\beta = -\gamma\alpha$.
+(c) When the proportional hazards assumption is untenable, or when the scientific
+    question is naturally framed in terms of time (e.g. how much treatment prolongs
+    survival), an AFT model can be more appropriate and more interpretable.
+:::
+
+## Other parametric models  (Book §5.15–5.16)
+
+### The proportional odds model
+
+*Type: Concept & notation*
+
+In the proportional odds model, $\dfrac{S_i(t)}{1 - S_i(t)} = e^{\eta_i}\dfrac{S_0(t)}{1 - S_0(t)}$.
+
+(a) What quantity do the explanatory variables act on, and how are the coefficients
+    interpreted?
+(b) What important property does the hazard ratio $h_i(t)/h_0(t)$ have in this
+    model, and in what kind of applications is this useful?
+(c) Which distribution has the proportional odds property (and also the AFT
+    property)?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) They act multiplicatively on the *odds of surviving beyond $t$*; each
+    coefficient is a log odds ratio for survival beyond any time $t$.
+(b) The hazard ratio converges from $e^{-\eta_i}$ at $t = 0$ towards unity as
+    $t \to \infty$ — the hazards converge over time. This is useful when treatment
+    or disease-stage effects are expected to wear off, or when a cured and a control
+    group become more alike over time.
+(c) The log-logistic distribution has both the proportional odds and the
+    accelerated failure time properties.
+:::
+
+## Putting it together
+
+### A misleading interpretation
+
+*Type: What's wrong here?*
+
+A researcher fits a Weibull accelerated failure time model and obtains a time ratio
+of $0.5$ for the new treatment. The researcher concludes: "The new treatment halves
+the risk of death."
+
+Explain what is wrong with this conclusion.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.** The time ratio is not a hazard ratio. A time ratio of $0.5$ means the
+survival time on the new treatment is *half* that on the standard treatment — the
+disease process is accelerated and the outcome is worse, not better. Under the
+Weibull model this corresponds to a hazard ratio of $\phi^{-\gamma} = 0.5^{-\gamma}
+> 1$ (for $\gamma \approx 1$, a hazard roughly *double* that of the standard). The
+conclusion should be that the new treatment roughly halves survival time (and thus
+increases the hazard), not that it halves the risk.
+:::
+
+## Mini-lab: fitting parametric models in R
+
+### Fitting a Weibull model with `survreg`
+
+*Type: Mini-lab*
+
+Run the code below. It simulates 300 patients in two treatment groups with Weibull
+survival times; the treated group has its survival times multiplied by $0.5$ (an
+accelerated failure time effect). A Weibull model is fitted with `survreg`.
+
+```{r}
+#| echo: true
+set.seed(911)
+n <- 300
+treat <- rep(c(0, 1), each = n/2)
+shape <- 0.8
+scale0 <- 20
+t0 <- rweibull(n/2, shape = shape, scale = scale0)
+t1 <- 0.5 * rweibull(n/2, shape = shape, scale = scale0)  # time ratio 0.5
+t <- c(t0, t1)
+cens <- runif(n, 0, 80)
+obs <- pmin(t, cens)
+status <- as.numeric(t <= cens)
+d <- data.frame(time = obs, status = status, treat = treat)
+
+library(survival)
+fit <- survreg(Surv(time, status) ~ treat, data = d, dist = "weibull")
+summary(fit)
+exp(coef(fit))
+```
+
+(a) What is the estimated coefficient of `treat`, and what does `exp(coef(fit))`
+    give for `treat`? Interpret this quantity.
+(b) The output reports `Scale`. What is the estimated Weibull shape parameter, and
+    what does it say about the hazard over time?
+(c) The coefficient of `treat` is on the log-time scale. What is the corresponding
+    hazard ratio under the Weibull proportional hazards model? Is the treatment
+    beneficial?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The estimated coefficient is about $-0.67$, and `exp(coef(fit))` gives about
+    $0.51$ for `treat` — the *time ratio*. The treated group's survival time is
+    about half that of the control group (the treatment accelerates the event).
+(b) `Scale` is about $1.21$, so the shape parameter is $\gamma = 1/\text{Scale}
+    \approx 0.83$ (close to the true $0.8$). Since $\gamma < 1$, the hazard
+    decreases over time.
+(c) The log hazard ratio is $\beta = -\alpha/\sigma \approx 0.67/1.21 \approx
+    0.55$, giving a hazard ratio of about $1.7$. The treatment *increases* the
+    hazard — it is not beneficial, consistent with the time ratio below 1.
+:::

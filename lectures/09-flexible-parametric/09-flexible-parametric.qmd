@@ -1,0 +1,526 @@
+---
+title: "Lecture 9: Flexible Parametric Models and Model Checking"
+subtitle: "STA310 Survival Analysis · Collett Chapters 6 and 7"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival); library(ggsurvfit); library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+hyper <- read.table(file.path(data_dir, "Treatment of hypernephroma.dat"), header = TRUE)
+hyper$nephrectomy <- factor(hyper$nephrectomy, levels = 0:1, labels = c("No", "Yes"))
+ovar <- read.table(file.path(data_dir, "Chemotherapy in ovarian cancer patients.dat"), header = TRUE)
+ovar$treat <- factor(ovar$treat, levels = 1:2, labels = c("Single", "Combined"))
+ovar$rdisease <- factor(ovar$rdisease, levels = 1:2, labels = c("Incomplete", "Complete"))
+ovar$perf <- factor(ovar$perf, levels = 1:2, labels = c("Good", "Poor"))
+bc <- read.table(file.path(data_dir, "Recurrence free survival in breast cancer patients.dat"), header = TRUE)
+bc$treat <- factor(bc$treat, levels = 0:1, labels = c("Control", "Treated"))
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+1. Recap and motivation: limits of standard families
+2. Piecewise exponential model
+3. Royston–Parmar spline models
+4. Other generalisations; choosing a model
+5. Residuals for parametric models
+6. Fitted vs Kaplan–Meier; influence; PH
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+You can
+
+- explain when Weibull / log-normal are too rigid
+- fit a piecewise exponential model as a Poisson GLM
+- fit and compare spline models with `flexsurvspline()`
+- check a parametric model with Cox–Snell residuals and by overlaying fitted curves on Kaplan–Meier
+:::
+:::
+
+## Recap (Lecture 8)
+
+- Parametric families: exponential, Weibull, log-logistic, log-normal
+- Weibull and exponential: both PH and AFT; log-logistic: PO and AFT
+- Fit with `survreg()` / `flexsurvreg()`, compare with AIC
+- Gain: smooth $h(t)$, $S(t)$, absolute risks, extrapolation. Price: **the shape is assumed**
+
+**Today's questions**: what if the hazard shape is not in any standard family, and how do we *know* a parametric model fits?
+
+# Beyond the standard families
+
+## Hazard shapes of the standard families
+
+| Family | Hazard shape |
+|---|---|
+| Exponential | constant |
+| Weibull | monotone (increasing or decreasing) |
+| Log-logistic | decreasing, or one hump (as in Lecture 8) |
+| Log-normal | one hump, then decreases to 0 |
+
+. . .
+
+Real hazards can be
+
+- **hump-shaped** with a peak that is not tied to the tail behaviour (recurrence after surgery)
+- **bathtub-shaped** (early mortality, plateau, ageing)
+- **complex**: several changes, e.g. after transplantation
+
+## A medical example where the hazard peaks
+
+Recurrence-free survival in `r nrow(bc)` breast cancer patients (time in days, `r sum(bc$status)` events).
+Recurrence hazard after surgery is known to rise and then fall.
+
+```{r}
+#| fig-height: 4
+survfit2(Surv(time, status) ~ treat, data = bc) |>
+  ggsurvfit() + add_confidence_interval() +
+  labs(x = "Days since surgery", y = "Recurrence-free probability")
+```
+
+The KM curve is steepest in the middle of follow-up: a monotone Weibull hazard cannot reproduce that.
+
+# Piecewise exponential model
+
+## Idea
+
+Cut the time axis at $a_0 = 0 < a_1 < \dots < a_J$. Assume a **constant hazard in each interval**:
+
+$$h(t \mid x) = \lambda_j \exp(\beta^\top x), \qquad a_{j-1} \le t < a_j$$
+
+- Baseline hazard is a step function with $J$ parameters
+- With $J = 1$: exponential model. With many intervals: close to a non-parametric baseline
+- Covariates enter as proportional hazards, as in Cox
+- Cut points are chosen by the analyst (e.g. quantiles of event times)
+
+## Fitting as a Poisson regression
+
+Within each interval the likelihood contribution of a patient is that of a Poisson variable:
+
+- $d_{ij}$ = event indicator in interval $j$ (0/1)
+- $y_{ij}$ = time at risk in interval $j$
+- $d_{ij} \sim \text{Poisson}(\mu_{ij})$ with $\log \mu_{ij} = \log y_{ij} + \log\lambda_j + \beta^\top x_i$
+
+Recipe:
+
+1. **Split** each patient's follow-up into intervals (`survSplit()`)
+2. Compute time at risk per row
+3. `glm(event ~ interval + covariates + offset(log(time at risk)), family = poisson)`
+
+## Step 1: split the data
+
+```{r}
+cuts <- c(500, 1000, 1500, 2000)
+bc_split <- survSplit(Surv(time, status) ~ treat + nodes, data = bc,
+                      cut = cuts, episode = "interval", start = "tstart", end = "tstop")
+bc_split$risktime <- bc_split$tstop - bc_split$tstart
+bc_split$interval <- factor(bc_split$interval)
+bc_split |> filter(row_number() %in% 1:6)
+```
+
+`r nrow(bc)` patients became `r nrow(bc_split)` rows. A patient who recurs after the last cut (e.g. at day `r max(bc$time[bc$status == 1])`) has one row per interval, with `status = 1` only in the last.
+
+## Step 2: Poisson GLM with offset
+
+```{r}
+pe <- glm(status ~ interval + treat + nodes + offset(log(risktime)),
+          family = poisson, data = bc_split)
+broom::tidy(pe, exponentiate = TRUE, conf.int = TRUE) |>
+  mutate(across(where(is.numeric), \(x) round(x, 4)))
+```
+
+- `interval` coefficients (exponentiated): hazard rate per day in each interval for the reference patient
+- `treatTreated`: hazard ratio `r round(exp(coef(pe)["treatTreated"]), 2)`
+- `nodes`: HR per additional positive node `r round(exp(coef(pe)["nodes"]), 3)`
+
+## Bridge to the Cox model
+
+```{r}
+cox <- coxph(Surv(time, status) ~ treat + nodes, data = bc)
+tibble(term = c("treat", "nodes"),
+       Cox = exp(coef(cox)),
+       PiecewiseExp = exp(coef(pe)[c("treatTreated", "nodes")]))
+```
+
+. . .
+
+- The estimated HRs are very close: the Cox model is the **limit** of the piecewise exponential model when the intervals become so fine that each contains one event time
+- The Cox partial likelihood = profile likelihood over a free step-function baseline
+- Piecewise exponential gives a baseline hazard **estimate** and allows non-PH by interval-by-covariate interactions, and also time-dependent covariates (Lecture 10) and time-varying effects (Lecture 11)
+
+::: {.callout-warning}
+Cut points should not be chosen by looking at which cuts give the "best" treatment effect. Keep enough events per interval (roughly 10-20 as a rough guide).
+:::
+
+## Piecewise exponential baseline hazard
+
+```{r}
+#| fig-height: 4
+base <- tibble(tstart = c(0, cuts), tstop = c(cuts, max(bc$time)),
+               rate = c(exp(coef(pe)["(Intercept)"]),
+                        exp(coef(pe)["(Intercept)"] + coef(pe)[paste0("interval", 2:5)])))
+ggplot(base, aes(x = tstart, xend = tstop, y = rate, yend = rate)) +
+  geom_segment(linewidth = 1.2) +
+  labs(x = "Days", y = "Hazard (control, 0 nodes)")
+```
+
+The step-function hazard is lowest in the first interval, highest after day 2000 and dips between 1000 and 2000: it is clearly not monotone (and the last interval is based on few patients), but it is not a clean hump either. Smoother alternatives follow.
+
+# Royston–Parmar spline models
+
+## Idea
+
+For the Weibull model: $\log H(t) = \log\lambda + \gamma \log t$ (Lecture 8), a **straight line in $\log t$**.
+
+Royston–Parmar: replace the straight line by a **natural (restricted) cubic spline** in $\log t$:
+
+$$\log H(t \mid x) = s(\log t;\, \mathbf{s}, \mathbf{k}) + \beta^\top x$$
+
+- $k$ interior knots (placed at quantiles of the log uncensored event times), plus 2 boundary knots
+- $k = 0$: $s = s_0 + s_1 \log t$, the **Weibull** model
+- Linear beyond the boundary knots (stable tails)
+- Covariate effects: $\beta$ is a log hazard ratio, as in a PH model. The linear predictor is written $\eta = \beta^\top x$ consistently (Lectures 8-9); the spline coefficients $s_0, s_1, \dots$ avoid a clash with the Weibull shape $\gamma$
+
+. . .
+
+Since $h(t) = \frac{d}{dt}H(t)$ is derived from the fitted $H$, the model gives $S(t)$ and $h(t)$ in closed form.
+
+## Three scales
+
+The same spline idea on different transformations of $S(t)$:
+
+| Scale | Model for | $\beta$ is a... |
+|---|---|---|
+| `hazard` (PH) | $\log H(t) = \log\{-\log S(t)\}$ | log hazard ratio |
+| `odds` (PO) | $\log\{(1-S)/S\}$ | log odds ratio of surviving |
+| `normal` (probit) | $\Phi^{-1}(1 - S(t))$ | probit-scale shift |
+
+- $k = 0$ gives Weibull (hazard), log-logistic (odds), log-normal (normal)
+- Choose scale and $k$ by AIC/BIC; the choice matters mostly in the tails
+- In `flexsurvspline()`: argument `scale = "hazard"` (default), `"odds"`, `"normal"`
+
+## First example: hypernephroma
+
+`r nrow(hyper)` patients, survival by nephrectomy (`nephrectomy` No/Yes); time units as in the data.
+
+```{r}
+library(flexsurv)
+sp_h <- lapply(0:2, \(k) flexsurvspline(Surv(time, status) ~ nephrectomy, data = hyper, k = k))
+tibble(k = 0:2, AIC = map_dbl(sp_h, AIC), BIC = map_dbl(sp_h, BIC))
+```
+
+With only `r nrow(hyper)` patients and `r sum(hyper$status)` events a flexible model has little to work with: AIC changes by `r round(AIC(sp_h[[1]]) - AIC(sp_h[[3]]), 1)` between $k = 0$ and $k = 2$, and BIC by `r round(BIC(sp_h[[1]]) - BIC(sp_h[[2]]), 1)` (positive = $k = 1$ lower) between $k = 0$ and $k = 1$.
+
+## Hypernephroma: the fitted model
+
+```{r}
+sp_h[[2]]
+```
+
+The `nephrectomy` row is the log hazard ratio on the PH scale: HR = `r round(exp(sp_h[[2]]$res["nephrectomyYes", "est"]), 2)` (95% CI `r round(exp(sp_h[[2]]$res["nephrectomyYes", "L95%"]), 2)` to `r round(exp(sp_h[[2]]$res["nephrectomyYes", "U95%"]), 2)`). The estimate is unadjusted (no age term) and based on few patients.
+
+## Back to the breast cancer data: choose $k$
+
+```{r}
+fits <- lapply(0:4, \(k) flexsurvspline(Surv(time, status) ~ treat + nodes, data = bc, k = k))
+wb <- flexsurvreg(Surv(time, status) ~ treat + nodes, data = bc, dist = "weibullPH")
+tibble(model = c("Weibull", paste0("spline k=", 1:4)),
+       logLik = c(logLik(wb), map_dbl(fits[2:5], \(f) as.numeric(logLik(f)))),
+       df = c(wb$npars, map_dbl(fits[2:5], \(f) f$npars)),
+       AIC = c(AIC(wb), map_dbl(fits[2:5], AIC)),
+       BIC = c(BIC(wb), map_dbl(fits[2:5], BIC)))
+```
+
+. . .
+
+- The spline with $k = 0$ reproduces the Weibull fit (AIC `r round(AIC(fits[[1]]), 1)` = `r round(AIC(wb), 1)`)
+- One knot improves AIC by `r round(AIC(wb) - AIC(fits[[2]]), 1)`; see the table for further knots. AIC picks $k =$ `r which.min(c(AIC(wb), map_dbl(fits[2:5], AIC))) - 1`, BIC $k =$ `r which.min(c(BIC(wb), map_dbl(fits[2:5], BIC))) - 1`
+- Pragmatic choice: a small $k$ whose plots look sensible, with differences in AIC below about 2 often treated as ties
+
+## Choosing the number of knots: advice
+
+- Start with $k = 1$ to $3$; more rarely needed (as rough guidance, fewer than about 20 events per knot is probably too few)
+- Compare AIC (prefers fit) and BIC (prefers parsimony); check that *plots* of $h(t)$ do not change much between neighbouring $k$
+- Knot positions: default quantiles of uncensored $\log t$; changing them has usually small impact
+- Too many knots give a **wiggly hazard** and unstable tails
+- Spline fit outside the data range: linear in $\log H$, i.e. a Weibull-like extrapolation, **not guaranteed to be sensible**
+
+## Fitted hazard: Weibull vs spline
+
+```{r}
+#| fig-height: 4.3
+nd <- data.frame(treat = factor("Control", levels = levels(bc$treat)), nodes = 4)
+tt <- seq(20, 2500, length.out = 200)
+haz <- bind_rows(
+  summary(wb, newdata = nd, type = "hazard", t = tt, tidy = TRUE) |> mutate(model = "Weibull"),
+  summary(fits[[3]], newdata = nd, type = "hazard", t = tt, tidy = TRUE) |> mutate(model = "Spline, k = 2"))
+ggplot(haz, aes(time, est, colour = model)) + geom_line(linewidth = 1.2) +
+  labs(x = "Days since surgery", y = "Hazard (control, 4 positive nodes)", colour = NULL)
+```
+
+The Weibull (PH) hazard is monotone; the spline model shows rise to a peak and subsequent decline. This is a clinically plausible recurrence pattern, the Weibull misses it.
+
+## Fitted survival: spline vs Weibull, by treatment
+
+```{r}
+#| fig-height: 4.3
+nd2 <- data.frame(treat = levels(bc$treat), nodes = mean(bc$nodes)) |>
+  mutate(treat = factor(treat, levels = levels(bc$treat)))
+sv <- bind_rows(
+  summary(wb, newdata = nd2, type = "survival", t = tt, tidy = TRUE) |> mutate(model = "Weibull"),
+  summary(fits[[3]], newdata = nd2, type = "survival", t = tt, tidy = TRUE) |> mutate(model = "Spline, k = 2"))
+ggplot(sv, aes(time, est, colour = treat, linetype = model)) + geom_line(linewidth = 1) +
+  labs(x = "Days", y = "Recurrence-free prob. (mean nodes)", colour = NULL, linetype = NULL)
+```
+
+## Reading the treatment effect
+
+```{r}
+tibble(model = c("Weibull", "Spline k=2"),
+       HR = c(exp(coef(wb)["treatTreated"]), exp(coef(fits[[3]])["treatTreated"])),
+       lower = c(exp(confint(wb)["treatTreated", 1]), exp(confint(fits[[3]])["treatTreated", 1])),
+       upper = c(exp(confint(wb)["treatTreated", 2]), exp(confint(fits[[3]])["treatTreated", 2])))
+```
+
+For `treat`, the HR can be compared across baselines (Weibull PH `r round(exp(coef(wb)["treatTreated"]), 2)` vs `r round(exp(coef(fits[[3]])["treatTreated"]), 2)`; compare Cox: `r round(exp(coef(cox)["treatTreated"]), 2)`). The flexible baseline matters for **absolute risk and hazard shape**, less for relative effects. Note that the HR is only interpretable if the PH assumption is reasonable.
+
+## Non-proportional effects in the spline model
+
+Allow the treatment effect to vary with time through `anc`: the spline slope ($s_1$, called `gamma1` in `flexsurv`) depends on `treat`.
+
+```{r}
+fit_nph <- flexsurvspline(Surv(time, status) ~ treat + nodes, data = bc, k = 2,
+                          anc = list(gamma1 = ~ treat))
+tibble(model = c("PH, k=2", "treat x spline slope"),
+       df = c(fits[[3]]$npars, fit_nph$npars), AIC = c(AIC(fits[[3]]), AIC(fit_nph)),
+       LRT_p = c(NA, pchisq(2 * (logLik(fit_nph) - logLik(fits[[3]])), 1, lower.tail = FALSE)))
+```
+
+A likelihood-ratio test for one extra parameter gives $p$ = `r signif(pchisq(2 * (logLik(fit_nph) - logLik(fits[[3]])), 1, lower.tail = FALSE), 2)`: this checks PH for treatment only, with limited power.
+
+## PO and probit scales
+
+```{r}
+scales <- c("hazard", "odds", "normal")
+sc <- lapply(scales, \(s) flexsurvspline(Surv(time, status) ~ treat + nodes, data = bc, k = 2, scale = s))
+tibble(scale = scales, AIC = map_dbl(sc, AIC), BIC = map_dbl(sc, BIC))
+```
+
+Similar fit on all three scales here, so the choice may rest on interpretation (HR, OR). With long follow-up and converging hazards, the PO scale may fit better than PH.
+
+## Other generalisations (one slide)
+
+- **Generalised gamma**: three parameters; contains exponential, Weibull, log-normal as special cases. `flexsurvreg(..., dist = "gengamma")`. Allows hump and bathtub shapes
+- **Splines on the hazard** (Collett §6.3): $\log h(t)$ modelled with splines; harder to get $S(t)$ (numerical integration)
+- **Time-dependent effects** via spline interactions (as above) or in the `rstpm2` package (name only)
+- **Mixture cure and other models** are beyond this course
+
+## Choosing between Cox, Weibull and flexible parametric
+
+| Situation | Cox | Weibull / standard | Flexible parametric (spline) |
+|---|---|---|---|
+| Question: relative effect (HR) only | **good default** | fine if the model fits | fine |
+| Small sample (roughly $<$ 50 events) | good | **good**, parsimonious | risk of overfitting |
+| Absolute risk / $S(t)$ at covariate values | needs baseline estimate (step function) | smooth, simple | **smooth and flexible** |
+| Hazard shape of interest | no | only monotone | **yes** |
+| Extrapolation beyond follow-up | no | yes, but strong assumption | yes, but linear in $\log t$ tail |
+| Non-PH, time-varying effects | extensions needed | AFT alternative | interactions with spline |
+
+# Model checking (Chapter 7)
+
+## Why check?
+
+A parametric model gives more than a Cox model, so it can be more wrong.
+
+- The **distribution** (e.g. Weibull) may not hold
+- The **linear predictor** may be misspecified (transformations, interactions)
+- Individual patients may be **outliers or influential**
+
+Two types of tools: **residuals** (per patient) and **fitted vs non-parametric curves** (per group). Everything here has a Cox analogue (Lectures 6-7), but we now use the fitted parametric model.
+
+## Example: ovarian cancer
+
+The ovarian cancer data from Lecture 8 (`r nrow(ovar)` women; `treat` Single/Combined, `rdisease` Incomplete/Complete, `perf` Good/Poor). The Weibull AFT model is the one from Lecture 8; it is refitted here only to obtain residuals.
+
+```{r}
+wb_ov <- survreg(Surv(time, status) ~ treat + age + rdisease + perf, data = ovar, dist = "weibull")
+```
+
+With `r nrow(ovar)` patients and `r sum(ovar$status)` events, power for any check is low.
+
+## Cox–Snell residuals: the idea
+
+If $T_i$ has survivor function $S_i(t)$ then $S_i(T_i) \sim U(0, 1)$, so
+
+$$r_i = \hat H_i(t_i) = -\log \hat S_i(t_i) \sim \text{Exp}(1)$$
+
+If the model is right, $\{r_i\}$ behave like a **censored sample from the unit exponential**. Censored observations give censored residuals.
+
+For the Weibull AFT model $\log T = \eta_i + \sigma\varepsilon$:
+
+$$r_i = \exp\left\{\frac{\log t_i - \hat\eta_i}{\hat\sigma}\right\}$$
+
+**Check**: compute the Kaplan–Meier / Nelson–Aalen estimate of $H$ for $(r_i, \delta_i)$. Plot $\hat H_{r}(r)$ against $r$: it should lie close to the line $y = x$.
+
+## Cox–Snell residuals in R
+
+```{r}
+#| fig-height: 4.3
+#| output-location: column
+eta_hat <- predict(wb_ov, type = "lp")
+ovar$cs <- exp((log(ovar$time) - eta_hat) / wb_ov$scale)
+na <- survfit(Surv(cs, status) ~ 1, data = ovar)
+ggplot(tibble(r = na$time, H = cumsum(na$n.event / na$n.risk)),
+       aes(r, H)) +
+  geom_step() + geom_abline(colour = "red") +
+  labs(x = "Cox-Snell residual", y = "Cumulative hazard of residuals")
+```
+
+Interpretation: the step function follows the 45-degree line reasonably, with deviations in the tail where few remain at risk (the last step jumps far above the line, driven by one or two large residuals). No gross lack of fit, though 26 patients leaves little power.
+
+## Cox–Snell residuals: cautions
+
+::: {.callout-warning}
+- Collett: Cox–Snell residuals are **good for overall fit of the distribution**, poor for detecting a missing covariate or functional form
+- Censored residuals are not "observed", so large residuals with censoring are not outliers
+- Deviations in the tail where few are at risk are expected: do not over-read
+- Adding variables that were *fitted* to the data makes the plot look better by construction
+:::
+
+Graphical check of the family: the Weibull plot from Lecture 8.
+
+## Standardised residuals
+
+For the AFT form $\log T_i = \eta_i + \sigma\varepsilon_i$:
+
+$$r_{Si} = \frac{\log t_i - \hat\eta_i}{\hat\sigma}$$
+
+These estimate the error terms $\varepsilon_i$, which have a **known distribution** (extreme value for Weibull, logistic for log-logistic, normal for log-normal). The Cox–Snell residual is $\exp(r_{Si})$ for Weibull. Here $\hat\sigma$ is `survreg`'s `scale`, linked to the Weibull shape of Lecture 8 by $\gamma = 1/\sigma$.
+
+Check: the Kaplan–Meier estimate of the survivor function of $r_{Si}$ against the theoretical one. For log-normal models this gives a **normal QQ-plot**-type check.
+
+## Martingale and deviance residuals
+
+- **Martingale residual**: $r_{Mi} = \delta_i - r_i$. Ranges in $(-\infty, 1]$, skewed, mean 0. Positive: died earlier than the model expects
+- **Deviance residual**: a transform to be more symmetric around 0,
+$$r_{Di} = \text{sign}(r_{Mi})\sqrt{-2\{r_{Mi} + \delta_i \log(\delta_i - r_{Mi})\}}$$
+
+Use: **plot against $\hat\eta_i$ or covariates** (e.g. age) to find outliers or non-linearity; approximately symmetric around zero if the model fits. Expect larger spread with high censoring.
+
+## Martingale and deviance residuals in R
+
+```{r}
+#| fig-height: 4.3
+#| output-location: column
+ovar$mart <- ovar$status - ovar$cs
+ovar$dev <- sign(ovar$mart) * sqrt(-2 * (ovar$mart + ifelse(ovar$status == 1, ovar$status * log(ovar$status - ovar$mart), 0)))
+ovar$eta <- eta_hat
+ggplot(ovar, aes(eta, dev, colour = factor(status))) + geom_point(size = 3) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  labs(x = "Linear predictor (eta)", y = "Deviance residual", colour = "Event")
+```
+
+Censored patients have negative residuals (cannot be positive). Look for **points with $|r_D| > 2$**: here `r sum(abs(ovar$dev) > 2)` patient(s). Check by eye for any trend with the linear predictor.
+
+## Comparing observed and fitted survival (Collett §7.3)
+
+The most intuitive check: overlay the **fitted parametric $S(t)$** on the **Kaplan–Meier** curve, for each group.
+
+1. Fit the model, predict $\hat S(t)$ for a typical covariate profile of the group
+2. Plot together with KM
+3. Look for systematic gaps, especially where the KM curve is well-estimated (many at risk)
+
+For models with several covariates: compare with **group-average fitted survival** (average $\hat S(t \mid x_i)$ over the patients in the group).
+
+## Fitted vs KM, breast cancer by treatment
+
+```{r}
+#| fig-height: 4.6
+#| code-fold: true
+km <- survfit(Surv(time, status) ~ treat, data = bc)
+kmd <- tibble(time = km$time, surv = km$surv, treat = rep(levels(bc$treat), km$strata))
+avg_surv <- function(fit, label) {
+  ts <- seq(20, 2500, length.out = 80)
+  map_dfr(levels(bc$treat), \(g) {
+    nd <- bc |> filter(treat == g)
+    s <- summary(fit, newdata = nd, type = "survival", t = ts, tidy = TRUE, B = 0)
+    s |> group_by(time) |> summarise(surv = mean(est), .groups = "drop") |> mutate(treat = g, model = label)
+  })
+}
+fitted_all <- bind_rows(avg_surv(wb, "Weibull"), avg_surv(fits[[3]], "Spline k = 2"))
+ggplot() + geom_step(data = kmd, aes(time, surv), colour = "grey40") +
+  geom_line(data = fitted_all, aes(time, surv, colour = model), linewidth = 1) +
+  facet_wrap(~ treat) + labs(x = "Days", y = "Recurrence-free probability", colour = NULL)
+```
+
+Grey: Kaplan–Meier. Both models are close overall; the spline follows the early shape better. The Weibull systematically deviates when the hazard is non-monotone.
+
+## Influential observations (Collett §7.4)
+
+- **Influence**: how much would $\hat\beta$ change if patient $i$ were removed?
+- Approximation without refitting: **score / dfbeta residuals**, $\Delta_i\hat\beta \approx$ change in $\hat\beta$
+- `residuals(fit, type = "dfbeta")` is available for `survreg`
+
+```{r}
+#| fig-height: 3.8
+#| output-location: column
+db <- residuals(wb_ov, type = "dfbeta")
+colnames(db) <- c(names(coef(wb_ov)), "logscale")
+tibble(id = ovar$patient, age = db[, "age"]) |>
+  ggplot(aes(id, age)) + geom_col() +
+  labs(x = "Patient", y = "Change in age coefficient")
+```
+
+Large bars flag patients to re-analyse without. Remember that influence is in units of the parameter: compare with its standard error (`r round(summary(wb_ov)$table["age", "Std. Error"], 3)`).
+
+## PH assumption in the parametric framework
+
+- Log-log plots and Weibull PH/AFT equivalence: see Lecture 8
+- New here: test PH with an **extra term** $\text{group} \times \log t$ (LRT, Collett §7.5)
+- In spline models, interaction of covariate and spline terms (as seen above) tests PH
+- **Log-logistic**: PO, not PH; PH and AFT are different assumptions for most families
+- If PH fails: stratify, time-dependent covariates (Lecture 10), non-PH / time-varying effects (Lecture 11), use AFT, or the flexible model
+
+## Quiz
+
+1. For a correct model, Cox–Snell residuals should look like...?
+2. Which spline model with $k = 0$ equals the Weibull?
+3. Why can a Poisson GLM give the same HR as Cox?
+4. Which is likely better for a small trial of 30 events: Weibull or $k = 3$ spline?
+
+::: {.fragment}
+1. A censored sample from Exp(1): $\hat H(r) \approx r$. 2. PH scale. 3. Piecewise exponential with fine cuts approximates the Cox partial likelihood. 4. Weibull: spline parameters are not stably estimated with so few events.
+:::
+
+## Exercise (in class, 15 minutes)
+
+Use `survival::lung` (n = `r nrow(survival::lung)`, `status` 1/2 = censored/dead, time in days) or the breast cancer data.
+
+1. Fit Weibull and `flexsurvspline()` with $k$ = 1, 2, 3 for `Surv(time, status) ~ sex`. Compare AIC and BIC.
+2. Plot the fitted hazards for men. Is the shape monotone?
+3. Compute Cox–Snell residuals for your Weibull model and make the plot of $\hat H(r)$ vs $r$.
+4. Overlay the fitted survival on KM by sex. What do you conclude?
+
+```{r}
+#| eval: false
+lung2 <- survival::lung |> mutate(status = status - 1)
+flexsurv::flexsurvspline(Surv(time, status) ~ sex, data = lung2, k = 1)
+```
+
+## Take-home messages
+
+- Standard families force a hazard shape; **piecewise exponential** and **Royston–Parmar splines** relax this
+- The piecewise exponential model is a **Poisson GLM** on split data; it bridges parametric and Cox
+- Spline models on $\log H(t)$ with $k$ knots: $k = 0$ is Weibull; choose $k$ with AIC/BIC **and** plots
+- Relative effects are often robust to baseline shape; absolute risks and hazard shapes are not
+- Check models with **Cox–Snell residuals** ($\approx$ censored Exp(1)), deviance residuals, and **fitted vs KM**
+- Check PH inside the parametric model and watch influential patients
+
+**Next lecture** (Lecture 10): time-dependent covariates (Collett, Chapter 8); time-varying effects and non-PH follow in Lecture 11
+
+**Reading**: Collett, Chapter 6 (§6.1, 6.2.3, 6.4) and Chapter 7 (§7.1-7.3, 7.5); skip the rest.

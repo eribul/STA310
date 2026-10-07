@@ -1,0 +1,402 @@
+---
+title: "Chapter 4: Model checking in the Cox regression model — Exercises"
+subtitle: "STA310 Survival Analysis (Master's in Applied Biostatistics)"
+lang: en
+solutions: false
+---
+
+Chapter 4 covers the diagnostics used to assess whether a fitted Cox model is
+adequate: the various residuals (Cox–Snell, martingale, deviance, Schoenfeld,
+score), their use in checking overall fit and the functional form of covariates,
+the detection of influential observations, and — most importantly — checking the
+proportional hazards assumption.
+
+## Residuals for the Cox regression model  (Book §4.1)
+
+### Cox–Snell residuals
+
+*Type: Concept & notation*
+
+The Cox–Snell residual for the $i$th individual is
+
+$$r_{Ci} = \exp(\hat\beta'x_i)\,\hat H_0(t_i).$$
+
+(a) Express $r_{Ci}$ in terms of the estimated cumulative hazard (or survivor
+    function) of the $i$th individual.
+(b) If the fitted model is correct, what distribution do the Cox–Snell residuals
+    approximately follow? State its mean, and say whether it is symmetric.
+(c) What happens to the residual of a right-censored individual, and how does this
+    complicate the use of the residuals for checking?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $r_{Ci} = \hat H_i(t_i) = -\log \hat S_i(t_i)$: the estimated cumulative hazard
+    (or minus the log of the estimated survivor function) for the individual,
+    evaluated at their observed survival time.
+(b) They approximately follow a unit exponential distribution, with mean 1 (and
+    variance 1). This distribution is highly skew and non-negative — the residuals
+    are not symmetric about zero, unlike residuals in linear regression.
+(c) If $t_i$ is censored, the residual is itself censored: we only know that the
+    true residual exceeds the value computed at the censoring time. The residuals
+    therefore form a censored sample from the unit exponential distribution.
+:::
+
+### Martingale residuals
+
+*Type: Concept & notation*
+
+*Builds on: Chapter 3*
+
+The martingale residual is $r_{Mi} = \delta_i - r_{Ci}$, where $\delta_i$ is the
+event indicator.
+
+(a) Interpret $r_{Mi}$ as the difference between two quantities.
+(b) What is the range of possible values, and what sign do censored observations
+    always have?
+(c) What property, shared with residuals from linear regression, do the martingale
+    residuals have?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) It is the difference between the observed number of events for individual $i$
+    over $(0, t_i)$ — namely $\delta_i$, which is 0 or 1 — and the estimated
+    expected number of events over that interval, $r_{Ci} = \hat H_i(t_i)$.
+(b) The range is $(-\infty, 1]$. For a censored observation $\delta_i = 0$, so
+    $r_{Mi} = -r_{Ci} < 0$: censored residuals are always negative.
+(c) They sum to zero (and, in large samples, are approximately uncorrelated with
+    expected value zero) — like residuals in linear regression.
+:::
+
+### Deviance residuals
+
+*Type: Concept & notation*
+
+(a) Why were deviance residuals introduced, given that martingale residuals already
+    existed?
+(b) In broad terms, how do they relate to martingale residuals?
+(c) Do deviance residuals sum to zero?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Martingale residuals are skew (asymmetric) even when the model is correct,
+    which makes plots hard to interpret. Deviance residuals are transformed to be
+    roughly symmetric about zero when the model is appropriate.
+(b) They are a sign-preserving transformation of the martingale residuals: large
+    negative martingale values are shrunk towards zero, and values near the upper
+    limit of 1 are expanded, producing a more symmetric distribution.
+(c) No — unlike martingale residuals, deviance residuals need not sum to zero.
+:::
+
+### Schoenfeld residuals
+
+*Type: Concept & notation*
+
+*Builds on: Chapter 3*
+
+The Schoenfeld residual for individual $i$ and explanatory variable $X_j$ is
+$r_{Sji} = \delta_i\,(x_{ji} - \hat a_{ji})$, where $\hat a_{ji}$ is a
+risk-set-weighted average of $X_j$ among the individuals at risk at time $t_i$.
+
+(a) How many Schoenfeld residuals are there for each individual, compared with the
+    Cox–Snell or martingale residuals?
+(b) Why are the residuals zero for censored observations, and what does
+    $\hat a_{ji}$ represent?
+(c) For what specific purpose are the (scaled) Schoenfeld residuals especially
+    useful?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) One per explanatory variable, not one per individual: $r_{Sji}$ is the residual
+    for individual $i$ with respect to covariate $X_j$, so a model with $p$
+    covariates gives $p$ residuals for each person.
+(b) They contain the factor $\delta_i$, so censored observations ($\delta_i = 0$)
+    give zero. $\hat a_{ji}$ is the "expected" value of $X_j$ for someone dying at
+    $t_i$ under the model — the risk-set average of $X_j$. The residual compares
+    the observed $x_{ji}$ with this expectation.
+(c) Checking the proportional hazards assumption: plotting scaled Schoenfeld
+    residuals against (a function of) time, and the associated
+    Grambsch–Therneau (zph) test.
+:::
+
+## Assessing model fit  (Book §4.2)
+
+### The cumulative hazard plot of the residuals
+
+*Type: Interpret figure*
+
+A common diagnostic is a plot of $\hat H(r_{Ci}) = -\log \hat S(r_{Ci})$ — the
+estimated cumulative hazard of the Cox–Snell residuals — against the residual
+values $r_{Ci}$.
+
+(a) What is being plotted, and why does a straight line through the origin with
+    unit slope indicate a good fit?
+(b) You obtain a plot that curves systematically away from that line. What do you
+    conclude?
+(c) Why is this plot regarded as insensitive — not to be relied on by itself?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) It plots the estimated cumulative hazard of the Cox–Snell residuals against
+    the residual values. If the residuals follow a unit exponential distribution,
+    their cumulative hazard is $H(r) = r$, a straight line through the origin with
+    unit slope; a straight line therefore supports model adequacy.
+(b) A systematic departure from the line suggests the model is misspecified and
+    needs to be modified.
+(c) The residuals only approximately follow a unit exponential distribution (the
+    approximation depends on the estimated $\beta$s and baseline hazard), and the
+    plot can look linear even when the model is seriously wrong; the null model
+    always gives a straight line. It must be supplemented by other diagnostics.
+:::
+
+### Checking the functional form of covariates
+
+*Type: Diagnostics & model critique*
+
+(a) Describe how martingale residuals from the null model can be used to check the
+    functional form of a continuous covariate.
+(b) What shape in the plot indicates that a linear term is adequate, and what
+    would indicate that a transformation is needed?
+(c) In the myeloma example, the smoothed martingale plot against Bun was roughly
+    straight, but the plot against $\log(\text{Bun})$ was curved. What does this
+    suggest about how Bun should enter the model?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Fit the null model (no covariates), obtain its martingale residuals, and plot
+    them against the covariate, with a smoothed curve superimposed. The plot
+    reveals the functional form the covariate should take in the model.
+(b) A straight line indicates a linear term suffices. A curved pattern indicates
+    non-linearity, suggesting a transformation (e.g. a logarithm) or a fractional
+    polynomial.
+(c) A straight line for Bun but curvature for $\log(\text{Bun})$ indicates Bun
+    should enter linearly, not as its logarithm — so a linear term in Bun is
+    appropriate.
+:::
+
+### Identifying poorly fitted observations
+
+*Type: Interpret figure*
+
+Two plots are used to look for outliers: an index plot of the deviance residuals,
+and a plot of the deviance residuals against the risk score.
+
+(a) What does a large positive (or large negative) deviance residual indicate about
+    an individual?
+(b) Why are deviance residuals preferred over martingale residuals for these plots?
+(c) What is the value of plotting the deviance residuals against the risk score
+    rather than just making an index plot?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) A large positive residual means the individual had an event sooner than
+    expected under the model; a large negative residual means they survived longer
+    than expected given their covariates. Either way they are poorly fitted
+    (potential outliers).
+(b) Deviance residuals are more symmetric, so plots are easier to interpret and
+    extreme observations stand out more clearly.
+(c) It relates poor fit to the covariates: for example, if the largest residuals
+    occur at low risk scores, individuals predicted to be low-risk are dying
+    unexpectedly early, hinting at a misspecified covariate effect.
+:::
+
+## Influential observations  (Book §4.3)
+
+### Delta-betas and influence
+
+*Type: Concept & notation*
+
+*Builds on: Chapter 3*
+
+(a) What is a delta-beta, $\Delta_i \hat\beta_j$, and what does a large absolute
+    value indicate?
+(b) On which residual are the delta-betas based?
+(c) How does influence on a single parameter estimate differ from the influence
+    summarised by the likelihood displacement $LD_i$ or the diagnostic $|l_{\max}|$?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) $\Delta_i \hat\beta_j \approx \hat\beta_j - \hat\beta_{j(i)}$ is the approximate
+    change in the estimate of $\beta_j$ when observation $i$ is omitted. A large
+    absolute value means that observation unduly influences that coefficient (and
+    hence the corresponding hazard ratio).
+(b) On the score residuals (in combination with the variance–covariance matrix of
+    the estimates).
+(c) Delta-betas assess influence on one specific coefficient. $LD_i$ and
+    $|l_{\max}|_i$ summarise influence on the whole set of parameter estimates (the
+    risk score, and hence the fitted hazard). An observation can be uninfluential
+    for each coefficient individually yet influential for the set.
+:::
+
+## Checking proportional hazards  (Book §4.4)
+
+### The log-cumulative hazard plot
+
+*Type: Assumptions*
+
+*Builds on: Chapters 1–3*
+
+For the Cox model, $\log H_i(t) = \beta'x_i + \log H_0(t)$.
+
+(a) Explain why, under proportional hazards, the log-cumulative hazard curves for
+    different groups should be parallel.
+(b) Describe how the plot is constructed when the covariate of interest is
+    continuous.
+(c) What are the main limitations of this plot?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Under proportional hazards, $\log H_i(t)$ differs between individuals only by
+    the constant $\beta'x_i$, so plots of $\log \hat H(t)$ against $\log t$ for
+    different groups differ only by a constant vertical shift — they are parallel.
+    Non-parallel curves indicate non-proportional hazards.
+(b) First categorise the continuous variable (e.g. into quartile-based groups),
+    compute the Kaplan–Meier estimate for each group, and plot
+    $\log\hat H(t) = \log(-\log\hat S(t))$ against $\log t$ for each group.
+(c) It can only handle one or a few factors with enough observations per level;
+    the curves are based on very few observations at late times; and it cannot
+    adjust for other covariates. Schoenfeld-residual methods are preferred in more
+    structured settings.
+:::
+
+### Schoenfeld residuals and the zph test
+
+*Type: Interpret R output*
+
+A Cox model with three variables (`treat`, `age`, `sex`) is fitted, and the
+proportional hazards assumption is tested. The output is:
+
+```
+           chisq df     p
+treat      9.84  1 0.002
+age        1.32  1 0.25
+sex        0.66  1 0.42
+GLOBAL    11.82  3 0.008
+```
+
+(a) What hypothesis does each row test?
+(b) Which variable(s) show evidence against proportional hazards?
+(c) What is the "GLOBAL" test, and what do you conclude overall?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) Each row tests that the coefficient of that variable is constant over time —
+    i.e. that proportional hazards holds for that variable. Under the null the
+    statistic has a chi-squared distribution on 1 degree of freedom.
+(b) `treat`: $\chi^2 = 9.84$, $P = 0.002$ — strong evidence its effect is
+    time-dependent. `age` ($P = 0.25$) and `sex` ($P = 0.42$) show no evidence
+    against proportional hazards.
+(c) The global test jointly tests proportional hazards for all variables
+    ($\chi^2 = 11.82$ on 3 d.f., $P = 0.008$), rejecting the assumption overall —
+    driven by the time-dependence of the treatment effect.
+:::
+
+### What to do when proportional hazards fails
+
+*Type: What if ...?*
+
+Suppose the zph test shows a treatment effect that decreases over time — a strong
+early benefit that wanes.
+
+(a) What does it mean, substantively, that the treatment effect is time-dependent?
+(b) Describe one model-based way (from §4.4.4) to capture this, and state the key
+    added term.
+(c) What does a test of that added term's coefficient amount to?
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The hazard ratio comparing treatments is not constant: the treatment's benefit
+    (or harm) is larger at some times than others. A single hazard ratio would
+    misrepresent the effect.
+(b) Add a time-dependent variable $X_2 = X_1 t$ (treatment $\times$ time) to the
+    model, so the log hazard ratio becomes $\beta_1 + \beta_2 t$; $\beta_2$ captures
+    how the effect changes with time. Often $X_1(t - t_0)$ is used instead, so
+    $\beta_1$ is the log hazard ratio at a reference time $t_0$.
+(c) Testing $\beta_2 = 0$ is a formal test of proportional hazards: if
+    $\beta_2 = 0$ the effect does not depend on time.
+:::
+
+## Putting it together
+
+### A misleading diagnostic conclusion
+
+*Type: What's wrong here?*
+
+A researcher reports: "I checked my Cox model by plotting the Cox–Snell residuals
+against survival time; they scattered roughly symmetrically about zero, so the
+model fits well."
+
+Explain what is wrong with this statement.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.** Three things are wrong. First, Cox–Snell residuals are non-negative
+and skew, centred on 1 (they approximate a unit exponential distribution), so they
+are never symmetric about zero. Second, plotting them against survival time (or
+its rank order) is unhelpful because they are correlated with time. Third, the
+appropriate overall check is the cumulative hazard plot of the residuals (a
+straight line of unit slope), supplemented by deviance-residual plots, functional
+form checks with martingale residuals, and a test of proportional hazards.
+:::
+
+## Mini-lab: checking a Cox model in R
+
+### Detecting non-proportional hazards
+
+*Type: Mini-lab*
+
+Run the code below. It simulates 400 patients in two treatment groups. The control
+group has a constant hazard, but the treated group has a hazard that *increases*
+over time, so the treatment effect is not constant. A Cox model is fitted and the
+proportional hazards assumption is tested.
+
+```{r}
+#| echo: true
+set.seed(731)
+n <- 400
+treat <- rep(c(0, 1), each = n/2)
+t0 <- rexp(n/2, rate = 0.05)                    # control: constant hazard
+t1 <- rweibull(n/2, shape = 2, scale = 1/0.07)  # treated: increasing hazard
+t <- c(t0, t1)
+cens <- runif(n, 0, 60)
+obs <- pmin(t, cens)
+status <- as.numeric(t <= cens)
+d <- data.frame(time = obs, status = status, treat = treat)
+
+library(survival)
+fit <- coxph(Surv(time, status) ~ treat, data = d)
+summary(fit)
+cox.zph(fit)
+```
+
+(a) From `summary(fit)`, report the estimated hazard ratio for `treat` and its
+    p-value. What would a naive interpretation conclude?
+(b) Report the test statistic and p-value from `cox.zph(fit)`. What does it tell
+    you?
+(c) Explain why the hazard ratio from (a) is misleading, and say what you should do
+    next.
+
+::: {.content-visible when-profile="solutions"}
+**Solution.**
+
+(a) The estimated hazard ratio is about $1.70$ ($P \approx 3 \times 10^{-5}$), so
+    the naive Cox model suggests treatment is associated with a significantly
+    higher hazard.
+(b) `cox.zph` gives $\chi^2 = 63.6$ on 1 degree of freedom, $P \approx
+    1.5 \times 10^{-15}$ — overwhelming evidence against proportional hazards. The
+    treatment effect is strongly time-dependent.
+(c) Because the hazards are not proportional (they actually cross), the single
+    "average" hazard ratio is misleading: it averages a time-changing effect. The
+    next step is to model the time-dependence — for example, add a
+    treatment $\times$ time term, or stratify — and describe how the effect varies
+    over time rather than reporting one hazard ratio.
+:::

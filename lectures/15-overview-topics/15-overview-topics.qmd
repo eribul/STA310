@@ -1,0 +1,783 @@
+---
+title: "Lecture 15: Overview of Further Topics"
+subtitle: "STA310 Survival Analysis · Collett Chapters 9, 10 and 15"
+
+date: today
+---
+
+```{r}
+#| include: false
+library(survival)
+library(ggsurvfit)
+library(tidyverse)
+theme_set(theme_minimal(base_size = 16))
+
+data_dir <- "../../Data sets from Modelling Survival Data in Medical Research, 4th edition"
+
+# Ulcer data (Collett Example 9.1): translate (time of last visit, result) to (L, R]
+# following Table 9.2 of the book
+ulcer <- read.table(file.path(data_dir, "Recurrence of an ulcer.dat"), header = TRUE) |>
+  mutate(
+    L = case_when(result == 1 ~ time,       # no ulcer at last visit: (time, Inf]
+                  time <= 6   ~ 0,          # ulcer found at/before month 6: (0, time]
+                  TRUE        ~ 6),         # ulcer found after a negative 6-month visit: (6, time]
+    R = if_else(result == 1, Inf, time),
+    trt = factor(treatment, 1:2, c("A", "B")),
+    dur = factor(duration, 1:2, c("<5 years", ">=5 years"))
+  )
+
+kidney_tx <- read.table(file.path(data_dir, "Survival following kidney transplantation.dat"), header = TRUE)
+hepatitis <- read.table(file.path(data_dir, "Chronic active hepatitis.dat"), header = TRUE)
+n_ulcer <- nrow(ulcer)
+```
+
+## Today
+
+::: {.columns}
+::: {.column width="55%"}
+This is an **overview** lecture (Zoom). Three topics at the edge of the course:
+
+- **A.** Interval-censored data (Chapter 9)
+- **B.** Frailty models (Chapter 10)
+- **C.** Sample size and power (Chapter 15)
+
+Pace: moderate. Everything is self-explanatory; read the slides, run the code afterwards.
+:::
+::: {.column width="45%"}
+**Learning goals**
+
+You can
+
+- recognise interval-censored data and write down its likelihood
+- fit non-parametric, semi-parametric and parametric models for it in R
+- explain what a frailty is and what a shared frailty model does
+- compute the number of events and patients needed for a trial
+- check power by simulation
+:::
+:::
+
+## Not exam-critical
+
+These topics are **not** core material. The goal is:
+
+- know the problem and why the standard tools fail
+- know which method and which R function to reach for
+- see one working example of each
+
+Full theory is in Collett; we do not derive anything today.
+
+# Part A: Interval-censored data {background-color="#f0f4f8"}
+
+## Motivation: we do not always see the event
+
+The event is something we **detect at a visit**, not something we observe happening.
+
+| Study | Event | What we know |
+|---|---|---|
+| Ulcer trial, endoscopy at 6 and 12 months | Ulcer recurrence | Absent at month 6, present at month 12 |
+| Cohort with cognitive tests every 2 years | Onset of dementia | Normal at 70, impaired at 72 |
+| HIV testing programme | Seroconversion | Negative in 2018, positive in 2021 |
+| Cancer follow-up scans | Recurrence | Scan clear in March, tumour seen in September |
+
+. . .
+
+The event time $T$ is only known to lie in an interval $(L, R]$ between two visits.
+
+## Definition
+
+$$L < T \le R$$
+
+| Situation | $(L, R]$ |
+|---|---|
+| Exact event time $t$ | $L = R = t$ |
+| Right-censored at $t$ | $(t, \infty)$ |
+| Left-censored at $t$ (already present at first visit) | $(0, t]$ |
+| Interval-censored | $(L, R]$ with $0 < L < R < \infty$ |
+
+. . .
+
+Right and left censoring are **special cases** of interval censoring. In R: `Surv(L, R, type = "interval2")` (with `R = Inf` for right-censored).
+
+*Current status data*: one single visit per person. Everyone is either left- or right-censored.
+
+## A picture
+
+```{r}
+#| echo: false
+#| fig-height: 3.6
+tibble(id = factor(1:4, labels = c("Exact", "Right-censored", "Left-censored", "Interval-censored")),
+       L = c(5, 8, 0, 4), R = c(5, 12, 3, 9)) |>
+  ggplot(aes(y = id)) +
+  geom_segment(aes(x = L, xend = R, yend = id), linewidth = 3, colour = "steelblue", lineend = "round") +
+  geom_point(aes(x = L), size = 3) +
+  geom_segment(data = tibble(id = factor("Right-censored", levels = levels(factor(c("Exact", "Right-censored", "Left-censored", "Interval-censored")))), L = 8),
+               aes(x = L, xend = 12.5, yend = id), arrow = arrow(length = unit(0.3, "cm")), colour = "steelblue", linewidth = 1.5) +
+  scale_y_discrete(limits = rev(c("Exact", "Right-censored", "Left-censored", "Interval-censored"))) +
+  labs(x = "Time (visits at 0, 3, 4, 8, 9, 12 ...)", y = NULL)
+```
+
+## Why not just use the visit times?
+
+Tempting shortcuts:
+
+1. use the **right endpoint** $R$ as event time ("detected at")
+2. use the **midpoint** $(L + R)/2$
+3. use the **left endpoint** $L$
+
+. . .
+
+Problems:
+
+- All three **invent** exact times that were never observed
+- Right endpoint: event times are overestimated; midpoint: artificial times; both depend on the **visit schedule**, not only on biology
+- Different visit schedules in the two arms (e.g. a treatment that suppresses symptoms) give **biased treatment comparisons** (Collett, Section 9.1)
+- Standard errors are too small, as the uncertainty about the time is ignored
+
+Shortcuts are acceptable only when the intervals are very short relative to the study length.
+
+## The likelihood contribution
+
+Individual $i$ with $T_i \in (L_i, R_i]$ contributes the **probability of that interval**:
+
+$$P(L_i < T_i \le R_i) = S(L_i) - S(R_i)$$
+
+. . .
+
+$$\mathcal{L} = \prod_{i} \big[ S(L_i) - S(R_i) \big]$$
+
+- Exact time: $S(t^-) - S(t)$ becomes the density $f(t)$ (usual contribution)
+- Right-censored: $R = \infty$, $S(\infty) = 0$, contribution $S(L)$ (usual contribution)
+- Left-censored: $L = 0$, $S(0) = 1$, contribution $1 - S(R) = F(R)$
+
+So **one formula** covers all censoring types. With a parametric $S(t)$ we maximise it directly; semi-parametric models need an additional idea (next slides).
+
+## Non-parametric estimation: Turnbull (idea only)
+
+Kaplan–Meier needs exact event times. Here the "steps" can only happen **somewhere inside** certain intervals.
+
+::: {.columns}
+::: {.column width="55%"}
+**Idea** (Turnbull's NPMLE):
+
+1. Sort all $L$ and $R$ values. The *Turnbull intervals* are those that start with an $L$ and end with an $R$ with no other endpoints in between.
+2. The likelihood only depends on how much probability mass sits in each Turnbull interval.
+3. Maximise iteratively (EM algorithm): distribute each person's mass across the intervals compatible with their data, update, repeat.
+:::
+::: {.column width="45%"}
+**Consequences**
+
+- $\hat S(t)$ is **flat** between Turnbull intervals
+- *Inside* a Turnbull interval $\hat S$ is not identifiable. We only know the drop in total.
+- With exact times it reduces to Kaplan–Meier
+- R: `icenReg::ic_np()`
+:::
+:::
+
+## Naive KM vs Turnbull: a simulation
+
+True times are Weibull; patients are seen every 3 time units until time 15.
+
+```{r}
+set.seed(8317)
+n <- 300
+t_true <- rweibull(n, shape = 1.5, scale = 10)
+visit <- seq(0, 15, by = 3)
+L <- visit[findInterval(t_true, visit, left.open = TRUE)]    # last visit before event
+R <- ifelse(t_true > 15, Inf, L + 3)                          # first visit after event
+head(cbind(t_true, L, R), 4)
+```
+
+. . .
+
+```{r}
+fit_turnbull <- icenReg::ic_np(cbind(L, R) ~ 0, data = data.frame(L, R))
+sc <- icenReg::getSCurves(fit_turnbull)
+```
+
+## Naive KM vs Turnbull: the plot
+
+The Turnbull estimate is only determined at the upper ends of the Turnbull intervals (here the visit times 3, 6, ..., 15), so we compare at these times.
+
+```{r}
+#| fig-height: 4.4
+mid <- ifelse(is.infinite(R), 15, (L + R) / 2)   # midpoint; censored at 15
+km_mid <- survfit(Surv(mid, is.finite(R)) ~ 1)
+km_right <- survfit(Surv(ifelse(is.infinite(R), 15, R), is.finite(R)) ~ 1)
+
+tt <- seq(3, 15, by = 3)
+cmp <- bind_rows(
+  tibble(time = c(0, tt), S = c(1, summary(km_mid, times = tt, extend = TRUE)$surv), method = "KM on midpoints"),
+  tibble(time = c(0, tt), S = c(1, summary(km_right, times = tt, extend = TRUE)$surv), method = "KM on right endpoints"),
+  # the first Turnbull "interval" is a point mass at 0, so values 2:6 belong to t = 3, ..., 15
+  tibble(time = c(0, tt), S = c(1, sc$S_curves$baseline[2:6]), method = "Turnbull"))
+ggplot(cmp, aes(time, S, colour = method)) +
+  geom_line(linewidth = 1) + geom_point(size = 2.5) +
+  stat_function(fun = \(x) pweibull(x, 1.5, 10, lower.tail = FALSE), colour = "black", linetype = 2) +
+  labs(x = "Time", y = "Estimated S(t)", colour = NULL) + theme(legend.position = "bottom")
+```
+
+Dashed black: the true $S(t)$.
+
+## Reading the plot
+
+- The **Turnbull** estimate follows the true curve at the visit times (the resolution of the 3-unit grid).
+- **Right endpoints** put the events too late: $\hat S$ lies above the truth.
+- **Midpoints** are better, but not unbiased, and they also create ties at artificial times.
+- The last visit is at time 15: nothing can be said beyond that.
+
+::: {.callout-warning}
+The size of the bias depends on the visit schedule. Wider intervals mean more bias.
+:::
+
+## Example: recurrence of an ulcer (Collett Example 9.1)
+
+`r n_ulcer` patients (Belgian centre), endoscopy at 6 and 12 months, plus unscheduled visits when symptoms occurred. Variables: `age`, `duration` (1: < 5 years, 2: $\ge$ 5 years), `treatment` (A, B), `time` of last visit, `result` (1 = no ulcer, 2 = ulcer).
+
+Conversion to $(L, R]$ as in Table 9.2 of the book:
+
+```{r}
+ulcer |> count(time, result, L, R) |> head(9)
+```
+
+Checked: all nine combinations agree with Collett Table 9.2, e.g. 12 months with a negative result is $(12, \infty]$.
+
+## Turnbull curves by treatment
+
+```{r}
+#| fig-height: 4.2
+fit_np <- icenReg::ic_np(cbind(L, R) ~ trt, data = ulcer)
+plot(fit_np, col = c("steelblue", "firebrick"), lwd = 2, xlab = "Months", ylab = "Probability of no recurrence")
+legend("bottomleft", legend = c("A", "B"), col = c("steelblue", "firebrick"), lwd = 2, bty = "n")
+```
+
+The curves are step functions whose drops are only located within Turnbull intervals (the plot shows them as shaded regions), and nothing can be said beyond 12 months. With only `r n_ulcer` patients, compare the two curves cautiously.
+
+## Regression models for interval-censored data
+
+| Model | R function | Baseline |
+|---|---|---|
+| Cox PH, **semi-parametric** | `icenReg::ic_sp(..., model = "ph")` | step function (NPMLE) |
+| Proportional odds, semi-parametric | `icenReg::ic_sp(..., model = "po")` | step function |
+| PH / PO / AFT, **parametric** | `icenReg::ic_par()` | Weibull, lognormal, ... |
+| Parametric AFT | `survival::survreg(Surv(L, R, type = "interval2") ~ ...)` | Weibull, lognormal, ... |
+
+The Cox model is not as simple as with exact times: the baseline survivor function and $\beta$ must be estimated together by maximising $\prod [S(L_i) - S(R_i)]$. Standard errors are best obtained by **bootstrap**.
+
+## Semi-parametric Cox model with `ic_sp`
+
+```{r}
+set.seed(5902)
+fit_sp <- icenReg::ic_sp(cbind(L, R) ~ trt + age + dur, data = ulcer, bs_samples = 200)
+summary(fit_sp)
+```
+
+Hazard ratio for treatment B vs A: `r round(exp(coef(fit_sp)["trtB"]), 2)`, but with a very wide interval. Nothing here is distinguishable from no effect (age and duration also show no effect). The bootstrap samples are random, so SE vary slightly between runs.
+
+## Parametric AFT with `survreg`
+
+```{r}
+fit_aft <- survreg(Surv(L, R, type = "interval2") ~ trt + age + dur,
+                   data = ulcer, dist = "weibull")
+summary(fit_aft)$table |> round(3)
+```
+
+- `type = "interval2"`: `L` and `R` as two columns; `R = Inf` (or `NA`) means right-censored.
+- Time ratio for B vs A: `r round(exp(coef(fit_aft)["trtB"]), 2)`. Recurrence free times are about `r round(100 * (1 - exp(coef(fit_aft)["trtB"])))`% shorter on B, but $p =$ `r round(summary(fit_aft)$table["trtB", "p"], 2)`.
+- Weibull shape: $1/\text{scale} =$ `r round(1 / fit_aft$scale, 2)`.
+
+. . .
+
+Same conclusion as the semi-parametric model (B slightly worse, not significantly). Direction agrees: HR > 1 in the PH model means shorter times, time ratio < 1 in the AFT model.
+
+## What the naive analysis would give
+
+Using the visit time as if the recurrence were exact (event = ulcer found):
+
+```{r}
+naive <- coxph(Surv(time, result == 2) ~ trt + age + dur, data = ulcer)
+bind_rows(naive = broom::tidy(naive, exponentiate = TRUE)[1, ],
+          interval = tibble(term = "trtB", estimate = exp(coef(fit_sp)["trtB"])),
+          .id = "analysis") |>
+  select(analysis, term, HR = estimate)
+```
+
+Here, the two analyses give broadly the same message (neither shows an effect). With only `r sum(ulcer$result == 2)` recurrences in `r nrow(ulcer)` patients this is not a proof that the shortcut is harmless; the simulation showed that bias can be substantial.
+
+::: {.callout-note}
+In the book's ulcer trial, the *detection mechanism* may differ by treatment (symptom suppression). Interval-based methods help with timing, but not with a detection that depends on the treatment.
+:::
+
+## Part A: practical notes
+
+- **Left-truncation vs censoring**: do not confuse; interval censoring is about *how precisely* $T$ is seen.
+- **Independent inspection times** are assumed: the visit schedule must not depend on the (unobserved) event time.
+- Many standard tools exist in the interval-censored setting too: `icenReg` also provides `ic_par` with Weibull, lognormal, gamma and others; `survreg` handles any AFT distribution.
+- Dementia, HIV and ulcer data are the typical examples, but **almost all data are interval-censored** to some degree (days rounded). It only matters when intervals are wide.
+- `icenReg` also ships example data, e.g. `IR_diabetes` (age at diabetes onset, mostly exact times plus intervals) and `miceData`.
+
+## Think about (Part A)
+
+1. A patient has a negative scan at month 6 and a positive scan at month 12. What is $(L, R]$? What do we know if the scan at month 12 was never done?
+2. Why does `Surv(time, status)` with $R$ as the time overestimate survival?
+3. What would the likelihood contribution be for a patient first seen at month 4 who already has the disease?
+
+# Part B: Frailty models {background-color="#f0f4f8"}
+
+## Motivation: heterogeneity we cannot measure
+
+Two patients with the same covariates can still have different hazards: genetics, lifestyle, centre, donor quality, unmeasured disease severity.
+
+. . .
+
+*Frailty* $z$: an **unobserved, multiplicative factor** on the hazard.
+
+- individual frailty: heterogeneity between persons
+- **shared frailty**: persons from the same *cluster* share the same $z$
+
+Clustered data (centres, paired organs, families) are **correlated**: the usual independence assumption fails. Recurrent events in the same person are one case; their data layout and the marginal AG/PWP approach are in **Lecture 14**, here we look at the frailty alternative.
+
+## The shared frailty model
+
+For individual $j$ in cluster $i$ (Collett, Equation 10.31):
+
+$$h_{ij}(t) = z_i \, h_0(t) \exp(\beta' x_{ij}) = h_0(t)\exp(\beta' x_{ij} + u_i), \qquad u_i = \log z_i$$
+
+- $z_i > 0$ is the cluster's frailty, shared by all $n_i$ members
+- $z_i$ is **random**, drawn from a distribution with mean 1 (gamma) or $u_i \sim N(0, \sigma^2)$ (log-normal)
+- Large $z_i$: the whole cluster is at higher risk; this creates correlation within the cluster
+- Variance parameter $\theta = \text{Var}(z_i)$ (gamma) or $\sigma^2$ (log-normal): $\theta = 0$ means no heterogeneity, i.e. the ordinary Cox model
+
+## Interpreting the variance
+
+- Variance **small**: clusters are similar, the model is close to a standard Cox model.
+- Variance **large**: strong cluster effects.
+- For the log-normal frailty with $\sigma^2$: a cluster at +1 SD has hazard multiplied by $e^{\sigma}$ compared to an average cluster. For example, $\sigma^2 = 0.3$ gives $e^{\sqrt{0.3}} =$ `r round(exp(sqrt(0.3)), 2)`.
+- For the gamma frailty, within-cluster association can be expressed as Kendall's $\tau = \theta/(\theta + 2)$ with the usual parametrisation (mean 1, variance $\theta$).
+
+Testing $H_0: \theta = 0$ is a test on the **boundary** of the parameter space: use a mixture $0.5\chi^2_0 + 0.5\chi^2_1$, which halves the usual $p$-value. Note that the test printed by `coxph` with `frailty()` is a different, approximate chi-square test (non-integer degrees of freedom, about 11 below), so it is not this boundary test.
+
+## Conditional vs marginal hazard ratios
+
+::: {.columns}
+::: {.column width="50%"}
+**Conditional** (frailty model)
+
+HR comparing two individuals **in the same cluster** (same frailty).
+
+$\exp(\beta)$ is the within-cluster effect.
+:::
+::: {.column width="50%"}
+**Marginal** (population-averaged)
+
+HR averaged over the frailty distribution.
+
+Typically **closer to 1** than the conditional HR, because the high-frailty individuals die early and the group left over differs.
+:::
+:::
+
+. . .
+
+The marginal approach (Cox model + `cluster()` for **robust variance**) estimates the population-average effect and corrects the standard errors for within-cluster correlation, but does *not* model the cluster effect and cannot estimate the variance.
+
+## Fitting in R
+
+```{r}
+#| eval: false
+# Gamma frailty (default): penalised likelihood
+coxph(Surv(time, status) ~ x1 + x2 + frailty(cluster), data = d)
+
+# Log-normal (Gaussian) frailty
+coxph(Surv(time, status) ~ x1 + x2 + frailty(cluster, dist = "gauss"), data = d)
+
+# Marginal model with cluster-robust standard errors
+coxph(Surv(time, status) ~ x1 + x2 + cluster(cluster), data = d)
+```
+
+::: {.callout-note}
+`frailty()` in `survival` is the older interface and is penalised-likelihood based. The modern alternative is `coxme::coxme(... + (1 | cluster))`, which is more flexible (several random effects, better handling of the variance). `coxme` is **not installed** here, so we use `frailty()`.
+:::
+
+## Example: kidney transplantation (Collett Example 10.4)
+
+Both kidneys from one deceased donor are transplanted into two recipients. `r nrow(kidney_tx)` recipients, `r n_distinct(kidney_tx$donor)` donors. Outcome: transplant survival. Covariates: age, diabetes (0/1), cold ischaemic time `cit` (hours).
+
+```{r}
+kidney_tx |> count(donor) |> count(n, name = "donors") |> rename(recipients_per_donor = n)
+```
+
+`r sum(kidney_tx$status)` events among `r nrow(kidney_tx)` recipients. Of the `r n_distinct(kidney_tx$donor)` donors, `r sum(table(kidney_tx$donor) == 2)` gave two recipients, so there is room for a **donor effect** shared by the pair.
+
+## Cox model ignoring the donor
+
+```{r}
+fit0 <- coxph(Surv(time, status) ~ age + diabetes + cit, data = kidney_tx)
+broom::tidy(fit0, exponentiate = TRUE, conf.int = TRUE) |>
+  select(term, HR = estimate, conf.low, conf.high, p.value) |> mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+Hazard ratio per year of age: `r round(exp(coef(fit0)["age"]), 3)`.
+
+## Shared gamma and log-normal frailty
+
+```{r}
+fit_g <- coxph(Surv(time, status) ~ age + diabetes + cit + frailty(donor), data = kidney_tx)
+fit_n <- coxph(Surv(time, status) ~ age + diabetes + cit + frailty(donor, dist = "gauss"), data = kidney_tx)
+fit_g
+```
+
+## Reading the output
+
+- Estimated frailty variance: `r round(fit_g$history[[1]]$theta, 2)` (gamma) and `r round(fit_n$history[[1]]$theta, 2)` (log-normal). Collett reports 0.31 and 0.28 from a likelihood-based fit; the value depends on the estimation method. Both are **small**.
+- The test of the frailty term (last row of the output) does not indicate donor heterogeneity. It is the approximate `coxph` chi-square test, not the boundary mixture test.
+- The coefficients are very close to the model without frailty: age `r round(coef(fit_g)["age"], 3)` vs `r round(coef(fit0)["age"], 3)`.
+
+. . .
+
+Conclusion (as in the book): there is no clear evidence of a donor effect on short-term transplant survival, and ignoring it does not materially change the conclusions. With only `r sum(kidney_tx$status)` events and mostly pairs, the variance is hard to estimate precisely.
+
+## The marginal alternative: robust variance
+
+```{r}
+fit_rob <- coxph(Surv(time, status) ~ age + diabetes + cit + cluster(donor), data = kidney_tx)
+tibble(term = names(coef(fit0)), estimate = coef(fit0),
+       SE_naive = summary(fit_rob)$coefficients[, "se(coef)"],
+       SE_robust = summary(fit_rob)$coefficients[, "robust se"]) |>
+  mutate(across(where(is.numeric), \(x) round(x, 4)))
+```
+
+Same point estimates; only the standard errors change. Here the robust SE are close to the naive ones, in line with a small donor effect. When clusters are strongly correlated and the covariate varies **between** clusters, the robust SE can be considerably larger.
+
+## Another example: infections on dialysis (`survival::kidney`)
+
+`r n_distinct(kidney$id)` patients (data set `kidney` from `survival`, not the transplant data `kidney_tx` above), each with **two** times to infection at the catheter insertion site. These are recurrent events: the marginal AG approach is in Lecture 14, here we use a frailty per patient.
+
+```{r}
+fit_k <- suppressWarnings(coxph(Surv(time, status) ~ age + sex + frailty(id), data = kidney))
+fit_k2 <- coxph(Surv(time, status) ~ age + sex + cluster(id), data = kidney)
+fit_k
+```
+
+::: {.callout-note}
+For this gamma frailty fit `coxph` warns "Inner loop failed to converge for iterations 3" (one inner Newton step of the penalised likelihood; the outer iterations finish normally). The Gaussian, non-sparse and fixed-theta variants give the same conclusion (large sex effect), so we suppress the warning with `suppressWarnings()`. Treat the variance estimate as approximate.
+:::
+
+The frailty variance is `r round(fit_k$history[[1]]$theta, 2)`: here there is moderate heterogeneity between patients (the test of the frailty term gives $p =$ `r round(summary(fit_k)$coefficients["frailty(id)", "p"], 2)`). Female patients (`sex = 2`) have a **conditional** hazard ratio of `r round(exp(coef(fit_k)["sex"]), 2)`, but the **marginal** (robust) model gives `r round(exp(coef(fit_k2)["sex"]), 2)`: the marginal effect is closer to 1, as discussed earlier.
+
+::: {.callout-note}
+The dataset has a column `frail`, which is **an estimate from an old analysis**, not a real covariate. Do not use it as a predictor.
+:::
+
+## A classic: heterogeneity shapes the population hazard
+
+Suppose **every individual has a constant hazard** $z_i \lambda$, with gamma frailty $z_i$ (mean 1, variance $\theta$). What does the population look like?
+
+$$h_{\text{pop}}(t) = \frac{\lambda}{1 + \theta \lambda t}$$
+
+. . .
+
+The population hazard **decreases**, although no individual's hazard does. The frail die first; the survivors are the robust ones (selection).
+
+Consequences:
+
+- An observed declining hazard can be a **heterogeneity artefact**, not a biological decline
+- Treatment effects: the marginal HR tends to **attenuate towards 1** with time, which can look like non-proportional hazards (see Lecture 11)
+
+## Simulation
+
+```{r}
+#| fig-height: 4.2
+set.seed(6104)
+n <- 20000; lambda <- 0.2; theta <- 2
+z <- rgamma(n, shape = 1 / theta, scale = theta)      # mean 1, variance theta
+t_ind <- rexp(n, rate = lambda * z)                   # constant individual hazards
+t_hom <- rexp(n, rate = lambda)                       # homogeneous population
+
+emp_haz <- function(t, breaks) {                      # events per unit person-time in bins
+  tibble(bin = cut(t, breaks)) |> filter(!is.na(bin)) |> count(bin, name = "events") |>
+    mutate(mid = breaks[-length(breaks)][as.integer(bin)] + diff(breaks)[1] / 2,
+           pt = map_dbl(as.integer(bin), \(k) sum(pmin(pmax(t - breaks[k], 0), diff(breaks)[1]))),
+           hazard = events / pt)
+}
+br <- seq(0, 12, by = 1)
+bind_rows(heterogeneous = emp_haz(t_ind, br), homogeneous = emp_haz(t_hom, br), .id = "population") |>
+  ggplot(aes(mid, hazard, colour = population)) + geom_point(size = 3) +
+  stat_function(fun = \(t) lambda / (1 + theta * lambda * t), colour = "black", linetype = 2) +
+  labs(x = "Time", y = "Population hazard", colour = NULL) + ylim(0, 0.25)
+```
+
+Dashed: the formula above with $\theta = 2$. Every individual in the "heterogeneous" population has a constant hazard.
+
+## Part B: pitfalls and practical advice
+
+- Frailty is **not identifiable** from a single event per person with no covariates and an unspecified baseline: the data cannot separate heterogeneity from the shape of $h_0$. Clusters with several members are what give information.
+- The **distribution** (gamma vs log-normal) is usually not testable; conclusions are rarely sensitive to it.
+- Conditional vs marginal: report which one you estimate.
+- Few events per cluster and small clusters give imprecise variance estimates.
+- Choose by the **question**: interest in the cluster-level variation or a prediction within clusters: frailty model. Only the population-average effect: marginal model with `cluster()`.
+- `coxme` (not installed) is the preferred tool for a log-normal frailty in practice.
+
+## Think about (Part B)
+
+1. Two patients get kidneys from the same donor. Why would we expect their outcomes to be correlated, even after adjusting for age?
+2. If the frailty variance is estimated as 0, what model do we get?
+3. A hazard ratio from a gamma frailty model is $0.6$. Is it the same as the HR from a marginal model? Which tends to be nearer to 1?
+
+# Part C: Sample size and power {background-color="#f0f4f8"}
+
+## The key principle: events, not patients
+
+The log-rank test (and Cox score test) has power determined by **the number of events** $d$, not by $n$:
+
+- 1000 patients with 20 events carry less information than 100 patients with 80 events
+- The planning therefore has two steps:
+  1. how many **events** $d$ do we need?
+  2. how many **patients** $n$ (and how long a study) to get $d$ events?
+
+Setting: two groups, hazard ratio $\psi$ (new vs standard), significance level $\alpha$, power $1 - \beta$, log-rank test.
+
+## Schoenfeld's formula
+
+Number of events required to detect a log hazard ratio $\log \psi_R$:
+
+$$d = \frac{(z_{1-\alpha/2} + z_{1-\beta})^2}{p_1 p_2 \, (\log \psi_R)^2}$$
+
+where $p_1, p_2$ are the proportions allocated to the groups. For equal allocation, $p_1 p_2 = 1/4$, and this is Collett's Equation 15.1, $d = 4(z_{\alpha/2} + z_\beta)^2/\theta_R^2$ (Collett's $\theta_R$ is our $\log\psi_R$).
+
+. . .
+
+```{r}
+schoenfeld <- function(hr, alpha = 0.05, power = 0.9, p1 = 0.5) {
+  (qnorm(1 - alpha / 2) + qnorm(power))^2 / (p1 * (1 - p1) * log(hr)^2)
+}
+schoenfeld(0.57)
+```
+
+## Worked example: chronic active hepatitis (Collett Example 15.1)
+
+A trial of a new treatment. In the standard arm 5-year survival is $S_S(5) = 0.41$; the new treatment is expected to give $S_N(5) = 0.60$. Under proportional hazards $S_N = S_S^{\psi}$, so
+
+```{r}
+psi <- log(0.60) / log(0.41)
+psi
+```
+
+The reference hazard ratio is $\psi_R = $ `r round(psi, 2)`, $\log \psi_R = $ `r round(log(0.57), 3)`. With $\alpha = 0.05$ and 90% power:
+
+```{r}
+d <- schoenfeld(0.57, alpha = 0.05, power = 0.90)
+c(exact = d, rounded_up = ceiling(d / 10) * 10)
+```
+
+About `r round(d)` events, rounded up to `r ceiling(d / 10) * 10` as in the book (about `r ceiling(d / 10) * 5` per arm); the formula is an approximation that tends to underestimate slightly.
+
+## Sensitivity to the assumed effect
+
+```{r}
+tibble(HR = c(0.5, 0.57, 0.65, 0.78, 0.9)) |>
+  mutate(events_80 = ceiling(schoenfeld(HR, power = 0.8)),
+         events_90 = ceiling(schoenfeld(HR, power = 0.9)))
+```
+
+- The required number of events grows with $1/(\log \text{HR})^2$: a **less optimistic HR** costs many more events.
+- HR 0.78 corresponds to a median of 5 years instead of 3.3 (book): about `r round(schoenfeld(0.78, power = 0.9) / 10) * 10` events at 90% power (book: around 680).
+- Unequal allocation ($p_1 \ne 0.5$) increases $d$: try `schoenfeld(0.57, p1 = 0.67)`.
+
+## The data behind the example
+
+The book data (Appendix B.1) are the `r nrow(hepatitis)` patients of the trial described by Kirk *et al.* (1980): randomised to prednisolone or an untreated control, with survival time **in months** (so 60 = 5 years). `treatment` 1 = prednisolone, 2 = control.
+
+```{r}
+fit_h <- survfit(Surv(time, status) ~ treatment, data = hepatitis)
+summary(fit_h, times = 60)$surv |> round(2)
+```
+
+Estimated 5-year survival (60 months). The control arm (treatment 2) gives `r round(summary(fit_h, times = 60)$surv[2], 2)` — the book's Example 15.1 standard-therapy rate (its median of 3.3 years is this same control arm expressed in years) — while prednisolone (treatment 1) gives `r round(summary(fit_h, times = 60)$surv[1], 2)`, i.e. the drug actually did better than the 0.60 used in the planning calculation. With `r sum(hepatitis$status)` events in `r nrow(hepatitis)` patients the observed HR (`r round(exp(-coef(coxph(Surv(time, status) ~ treatment, data = hepatitis))), 2)`, prednisolone vs control) is very imprecise, and the planning value 0.57 is more conservative. Pilot estimates are noisy: be careful when choosing $\psi_R$.
+
+## From events to patients
+
+$$n = \frac{d}{P(\text{event})}$$
+
+$P(\text{event})$ is the probability that a randomly chosen patient has an event **before the study ends**.
+
+- patients enter uniformly during an **accrual** period $a$
+- then they are followed for another period $f$ (**follow-up**), total study length $a + f$
+- a patient entering at time $u$ is followed for $a + f - u$
+
+With exponential survival ($S(t) = e^{-\lambda t}$) and uniform accrual:
+
+$$P(\text{event}) = 1 - \frac{1}{a}\int_f^{a+f} e^{-\lambda t}\,dt = 1 - \frac{e^{-\lambda f} - e^{-\lambda (a + f)}}{\lambda a}$$
+
+Average over the two arms (hazards $\lambda_S$ and $\psi \lambda_S$).
+
+## Events to patients in R
+
+Assume exponential survival with $S_S(60 \text{ months}) = 0.41$. Accrual $a = 18$, follow-up $f = 24$ months.
+
+```{r}
+p_event <- function(lambda, a, f) 1 - (exp(-lambda * f) - exp(-lambda * (a + f))) / (lambda * a)
+
+d_plan <- 140                      # events from Schoenfeld, rounded up (book)
+lam_S <- -log(0.41) / 60           # per month
+lam_N <- 0.57 * lam_S
+pe <- mean(c(p_event(lam_S, 18, 24), p_event(lam_N, 18, 24)))
+n_exp <- ceiling(d_plan / pe)
+c(P_event = pe, n = n_exp, per_month = n_exp / 18)
+```
+
+Collett finds $P = 0.350$ and $n = 400$ (393 in a variant, Section 15.3) using the **observed** Kaplan-Meier curve and Simpson's rule (Eq. 15.11). Our exponential model gives $P =$ `r round(pe, 3)`, hence **`r n_exp` patients** (about `r round(n_exp / 18)` per month over 18 months). The difference arises because an exponential curve through $S_S(5) = 0.41$ differs from the observed survival curve at the times that matter here, so fewer events per patient are expected than with the observed curve. Both are rough planning values.
+
+## Accrual and follow-up
+
+```{r}
+#| fig-height: 4
+grid <- expand_grid(a = c(12, 18, 24, 36), f = seq(0, 48, by = 2)) |>
+  mutate(pe = map2_dbl(a, f, \(a, f) mean(c(p_event(lam_S, a, f), p_event(lam_N, a, f)))),
+         n = ceiling(d_plan / pe))
+ggplot(grid, aes(f, n, colour = factor(a))) + geom_line(linewidth = 1) +
+  labs(x = "Follow-up period after accrual (months)", y = "Patients needed for 140 events", colour = "Accrual (months)")
+```
+
+No follow-up means many more patients. In a trial with a fixed budget of patients, extending **follow-up** is usually cheaper than recruiting more, until the curve flattens.
+
+## What else changes the answer
+
+| Factor | Effect | What to do |
+|---|---|---|
+| Loss to follow-up / competing deaths | Fewer events per patient | Inflate $n$, e.g. by $1/(1 - \text{dropout})$ (rough); or include in simulation |
+| Slow accrual | Longer study | Extend $a$ or $f$ |
+| Non-proportional hazards (delayed or waning effect, crossing curves) | Log-rank test loses power, HR not well defined | Weighted log-rank, RMST (see Lecture 11); simulate under realistic curves |
+| Clustering (centres, families) | Events carry less independent information | Inflate by a design effect, approx. $1 + (m - 1)\rho$; plan with a frailty model |
+| More covariates adjustment | Small gain in precision (in Cox models) | Ignore in planning, typically |
+| Interim analyses | Alpha is spent | Group sequential design (`gsDesign`) |
+
+::: {.callout-note}
+`powerSurvEpi` and `gsDesign` are specialised packages for sample size and group sequential design. They are **not installed** here, so we use base R.
+:::
+
+## Check by simulation
+
+When formulas get complicated, **simulate the trial** many times and count rejections.
+
+```{r}
+sim_power <- function(n, hr, lambda0, a, f, dropout = 0, delay = 0, nsim = 1000) {
+  mean(replicate(nsim, {
+    arm <- rep(0:1, length.out = n)
+    entry <- runif(n, 0, a)
+    t_ev <- rexp(n, lambda0)                         # control arm; treated: hazard lambda0 until `delay`,
+    t_trt <- ifelse(t_ev <= delay, t_ev, delay + rexp(n, hr * lambda0))   # then hr * lambda0 (memoryless)
+    t_ev <- ifelse(arm == 1, t_trt, t_ev)
+    t_lo <- if (dropout > 0) rexp(n, dropout) else rep(Inf, n)
+    t_obs <- pmin(t_ev, t_lo, a + f - entry)        # administrative censoring at study end
+    status <- as.numeric(t_ev <= pmin(t_lo, a + f - entry))
+    survdiff(Surv(t_obs, status) ~ arm)$pvalue < 0.05
+  }))
+}
+```
+
+Exponential survival; the treated arm has hazard $\text{HR} \cdot \lambda_0$ after an optional `delay` (default 0 = proportional hazards). Censoring: end of study, plus optional exponential drop-out.
+
+## Does the formula hold?
+
+```{r}
+set.seed(sample.int(1e6, 1))        # random seed
+res <- tibble(
+  scenario = c(paste0("Planned: n = ", n_exp, " (exponential), PH"),
+               "Collett's figure: n = 400",
+               "Fewer patients: n = 300",
+               paste0("20% drop-out over 5 years, n = ", n_exp)),
+  power = c(sim_power(n_exp, 0.57, lam_S, 18, 24),
+            sim_power(400, 0.57, lam_S, 18, 24),
+            sim_power(300, 0.57, lam_S, 18, 24),
+            sim_power(n_exp, 0.57, lam_S, 18, 24, dropout = -log(0.8) / 60)))
+res
+```
+
+- With the planned design (`r n_exp` patients from our exponential calculation) the simulated power should be near the target 90%; Collett's 400 patients is fewer, so power is slightly lower. The result varies by roughly $\pm 1$-2 percentage points due to simulation error with 1000 replicates.
+- Fewer patients means fewer events, so lower power.
+- Drop-out removes events: the power drops from the planned value (rows 1 and 4).
+
+## Non-proportional hazards
+
+Same design (n = `r n_exp`), but the treatment only starts to work after a **delay** of 12 months (hazard ratio 1 before, 0.57 after): a typical situation for immunotherapy or screening.
+
+```{r}
+c(PH = sim_power(n_exp, 0.57, lam_S, 18, 24, nsim = 500),
+  delay_12_months = sim_power(n_exp, 0.57, lam_S, 18, 24, delay = 12, nsim = 500))
+```
+
+The log-rank test is optimal for proportional hazards. With a diluted or delayed effect, fewer events carry the effect and power falls. Think about the shape of the hazard ratio already when planning. Weighted log-rank tests and RMST are alternatives: see Lecture 11.
+
+## Power curves
+
+Schoenfeld in the other direction: $\text{power} = \Phi\!\left(\sqrt{d\, p_1 p_2}\,|\log \psi| - z_{1-\alpha/2}\right)$.
+
+```{r}
+#| fig-height: 4.3
+power_fn <- function(d, hr, alpha = 0.05, p1 = 0.5) pnorm(sqrt(d * p1 * (1 - p1)) * abs(log(hr)) - qnorm(1 - alpha / 2))
+expand_grid(d = seq(20, 400, by = 5), HR = c(0.5, 0.6, 0.7, 0.8)) |>
+  mutate(power = power_fn(d, HR)) |>
+  ggplot(aes(d, power, colour = factor(HR))) + geom_line(linewidth = 1) +
+  geom_hline(yintercept = c(0.8, 0.9), linetype = 3) +
+  labs(x = "Number of events d", y = "Power (two-sided alpha = 0.05)", colour = "True HR")
+```
+
+## Power as a function of the HR
+
+```{r}
+#| fig-height: 4.3
+expand_grid(HR = seq(0.4, 0.95, by = 0.01), d = c(70, 140, 280)) |>
+  mutate(power = power_fn(d, HR)) |>
+  ggplot(aes(HR, power, colour = factor(d))) + geom_line(linewidth = 1) +
+  geom_hline(yintercept = 0.9, linetype = 3) +
+  labs(x = "True hazard ratio", y = "Power", colour = "Events")
+```
+
+With the planned `r d_plan` events, power is `r round(100 * power_fn(d_plan, 0.57))`% if the true HR is 0.57, but only `r round(100 * power_fn(d_plan, 0.7))`% if it is 0.7. A trial that is powered for an optimistic effect is **underpowered** for a realistic one.
+
+## Part C: pitfalls
+
+- Choose $\psi_R$ as the **smallest clinically relevant** effect, not what you hope for
+- Report all assumptions: $\alpha$, power, HR, control event rate, accrual, follow-up, drop-out, allocation
+- Formulas assume proportional hazards and independent censoring
+- Post hoc power calculation from an observed result is not informative: report a CI
+
+## Think about (Part C)
+
+1. Why does a long follow-up reduce the number of patients needed?
+2. Reducing the expected HR from 0.57 to 0.78: by what factor does $d$ change? (Check with `schoenfeld`.)
+3. A trial has 400 patients but only 60 deaths so far. Is it likely to be adequately powered for HR 0.6?
+
+# Wrap-up {background-color="#f0f4f8"}
+
+## What we skipped
+
+- **Dependent (informative) censoring** (Chapter 14): what if censoring is related to prognosis? Sensitivity analyses and models for the censoring process.
+- **Bayesian survival analysis** (Chapter 16): priors for $\beta$ and $h_0$, posterior inference, prediction.
+- Also not covered today: multivariate/multi-state frailty models, joint models, group sequential designs.
+
+## Take-home messages
+
+::: {.callout-important}
+**Interval censoring.** The event is only known to lie in $(L, R]$; the likelihood contribution is $S(L) - S(R)$. Use Turnbull (`icenReg::ic_np`), `ic_sp` or `survreg(..., type = "interval2")` rather than midpoints or right endpoints.
+:::
+
+::: {.callout-important}
+**Frailty.** Unobserved heterogeneity, shared within clusters, acts multiplicatively on the hazard. `coxph(... + frailty(id))` gives conditional HRs and a variance; `cluster(id)` gives marginal HRs with robust SE. Heterogeneity alone can make a population hazard decline.
+:::
+
+::: {.callout-important}
+**Sample size.** Power depends on the number of **events**: $d = (z_{1-\alpha/2} + z_{1-\beta})^2 / (p_1 p_2 (\log \psi_R)^2)$. Convert to patients with $P(\text{event})$, which depends on accrual, follow-up and drop-out. Check by simulation.
+:::
+
+**Next lecture**: repetition.
+
+**Reading**: Collett, Chapter 9 (Sections 9.1-9.4), Chapter 10 (Sections 10.1-10.3 and 10.7, the shared frailty model; Example 10.4) and Chapter 15 (Sections 15.1-15.3).
+
+## Self-check questions
+
+1. Write the likelihood contribution for an exact, a right-censored, a left-censored and an interval-censored observation.
+2. Why is KM on midpoints biased? In which direction does using the right endpoint bias $\hat S$?
+3. What is the difference between `frailty(id)` and `cluster(id)` in `coxph`? Which one estimates a variance?
+4. Why can a population hazard decrease although all individual hazards are constant?
+5. Compute the number of events needed for HR 0.7, 80% power, $\alpha = 0.05$, equal allocation.
+6. Name three design factors that determine the number of patients when the number of events is fixed.
