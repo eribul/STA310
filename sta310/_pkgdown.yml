@@ -1,0 +1,64 @@
+url: https://eriklgb.github.io/STA310/
+
+template:
+  bootstrap: 5
+
+reference:
+- title: Teaching functions
+  desc: >
+    Estimators from the STA310 lectures, implemented from first principles so
+    that every step can be inspected.
+  contents:
+  - km_estimate
+  - plot_km
+  - cox_fit
+  - cox_fit-methods
+  - print.sta310_cox
+  - emp_hazard
+  - n_events_logrank
+  - power_logrank
+  - power_logrank_sim
+  - cif_cause_specific
+- title: Data sets
+  desc: >
+    The data sets distributed with Collett (2023), with the original column
+    names.
+  contents:
+  - aortic
+  - bladder
+  - bmt
+  - bmt_leukaemia
+  - bmt_outcome
+  - breast
+  - breast_rfs
+  - cgd
+  - cirrhosis
+  - cirrhosis_cp
+  - cirrhosis_lbr
+  - dialysis
+  - ducks
+  - gastric
+  - help
+  - hepatitis
+  - hyper
+  - iud
+  - kidney
+  - kidney_centres
+  - liver
+  - liver_wait
+  - lung_transplant
+  - melanoma
+  - mice
+  - myeloma
+  - numerical_illustration
+  - ovarian
+  - prostate
+  - pulmonary
+  - rats
+  - tamoxifen
+  - ulcer
+- title: Other data sets
+  desc: >
+    Data sets that are used in the course but do not come from Collett (2023).
+  contents:
+  - scottish_mbc_cohort

@@ -1,0 +1,1 @@
+- Boken har inga exempel med Schoenfeld-residualer vilket väl trotts allt är det vanligaste!? Ska vi ha det i labb?

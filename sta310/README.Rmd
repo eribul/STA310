@@ -1,0 +1,95 @@
+---
+output: github_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+# sta310
+
+`sta310` collects the data sets that accompany Collett (2023), *Modelling
+Survival Data in Medical Research* (4th edition), together with a small set of
+teaching functions that implement the estimators used in the STA310 course at
+the University of Gothenburg from first principles. The estimators are written
+so that the individual steps can be inspected in the lectures and computer
+exercises, and they agree with the established implementations in `survival` to
+within numerical tolerance.
+
+## Installation
+
+The package lives in the `sta310/` directory of the course repository, so
+`subdir` has to be given:
+
+```{r, eval = FALSE}
+devtools::install_github("eriklgb/STA310", subdir = "sta310")
+```
+
+## Data sets
+
+All 33 data sets from the book are available under the object names used in the
+course material, with the original column names, and each of them has a help
+page with the background of the study, the coded variables and the relevant
+examples in Collett (2023):
+
+```{r}
+library(sta310)
+data(package = "sta310")$results[, "Item"]
+```
+
+The package also ships `scottish_mbc_cohort`, the synthetic Scottish metastatic
+breast cancer cohort used in the first computer exercise. It is **not** from the
+book: it comes from the teaching material of the Edinburgh Cancer Informatics
+group, and that is what its help page documents (`?scottish_mbc_cohort`).
+
+Note that six of the names are also used by the `survival` package, for data
+sets that are not the same: `bladder`, `cgd`, `kidney`, `myeloma`, `ovarian` and
+`rats`. Attach `sta310` last, or use `sta310::myeloma`, if both packages are
+attached.
+
+```{r}
+iud
+```
+
+## Teaching functions
+
+* `km_estimate()` and `plot_km()`: the Kaplan-Meier estimator with Greenwood
+  standard errors, and a plot of it.
+* `cox_fit()`: Cox regression fitted by Newton-Raphson, with Breslow or Efron
+  handling of ties.
+* `emp_hazard()`: empirical, piecewise constant hazard estimates.
+* `n_events_logrank()`, `power_logrank()` and `power_logrank_sim()`: sample
+  size, power and simulation for the log-rank test.
+* `cif_cause_specific()`: cumulative incidence functions from cause-specific
+  Cox models.
+
+## Example
+
+`km_estimate()` returns the risk sets, the events and censorings, the survivor
+function and its standard error at each event time:
+
+```{r}
+km <- km_estimate(iud$time, iud$status)
+km
+```
+
+`cox_fit()` reproduces `survival::coxph()` on the same data:
+
+```{r}
+fit <- cox_fit(myeloma$time, myeloma$status, myeloma[, c("age", "bun")])
+ref <- survival::coxph(survival::Surv(time, status) ~ age + bun, data = myeloma)
+cbind(cox_fit = coef(fit), coxph = coef(ref))
+```
+
+See `vignette("sta310")` for a walk-through of the data sets and the teaching
+functions, and `vignette("cs1-survival-analysis")` for the first computer
+exercise, which has the solutions to all its questions hidden behind
+*Show solution*. Both are HTML documents.
+
+## Course material
+
+The lectures, exercises and labs that use this package are part of the same
+repository. Collett (2023) is the textbook for the course:
+
+> Collett, D. (2023) *Modelling Survival Data in Medical Research*, 4th ed.
+> Chapman & Hall/CRC.

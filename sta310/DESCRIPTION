@@ -1,0 +1,52 @@
+Package: sta310
+Title: Data Sets and Teaching Functions for the STA310 Survival Analysis Course
+Version: 0.1.0
+Authors@R:
+    person("Erik", "Bülow", , "eriklgb@gmail.com", role = c("aut", "cre"))
+Description: The data sets that accompany Collett (2023), "Modelling Survival
+    Data in Medical Research" (4th edition), documented for the STA310 course at
+    the University of Gothenburg. The package also provides a small set of
+    teaching functions that implement the estimators used in the lectures from
+    first principles: the Kaplan-Meier estimator, Cox regression by
+    Newton-Raphson, empirical hazards, log-rank power and sample size, and
+    cumulative incidence functions from cause-specific hazards.
+License: MIT + file LICENSE
+URL: https://github.com/eriklgb/STA310,
+    https://eriklgb.github.io/STA310/
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Depends:
+    R (>= 4.1.0)
+Imports:
+    stats,
+    survival,
+    utils
+Suggests:
+    broom,
+    cmprsk,
+    dplyr,
+    flexsurv,
+    ggplot2,
+    ggsurvfit,
+    gt,
+    gtsummary,
+    icenReg,
+    knitr,
+    mstate,
+    pec,
+    readxl,
+    rmarkdown,
+    rms,
+    riskRegression,
+    survminer,
+    testthat (>= 3.1.5),
+    tibble,
+    tidycmprsk,
+    tidyr,
+    tidyverse
+VignetteBuilder:
+    knitr
+LazyData: true
+Config/testthat/edition: 3
+Config/Needs/website: pkgdown
+Config/roxygen2/version: 8.1.0

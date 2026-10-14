@@ -1,0 +1,186 @@
+---
+title: "Getting started with sta310"
+output:
+  rmarkdown::html_vignette:
+    toc: true
+vignette: >
+  %\VignetteIndexEntry{Getting started with sta310}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.height = 3.5)
+
+# Several data sets in this package have the same names as data sets in the
+# survival package (for example `myeloma`), and the package that was attached
+# last is the one that is found first. Refer to this package explicitly so that
+# the examples below do not depend on the order in which packages are attached.
+myeloma <- sta310::myeloma
+```
+
+```{r}
+library(sta310)
+```
+
+## Overview
+
+`sta310` contains two things that are useful when working through the
+STA310 course in survival analysis at the University of Gothenburg:
+
+* the 33 data sets that accompany Collett (2023), *Modelling Survival Data in
+  Medical Research* (4th edition), documented with the background of each study
+  and the coded variables; and
+* a small set of teaching functions that implement the estimators from the
+  lectures from first principles, so that every step in the calculation can be
+  inspected rather than hidden inside a black box.
+
+The teaching functions are not meant to replace the established implementations
+in `survival` and related packages. On the contrary, most of them agree with
+`survival` to within numerical tolerance, and the exercises compare the two.
+
+## The data sets
+
+All data sets are available by name once the package is loaded, and each of them
+has a help page with the study background, the variable codings and references
+to the relevant chapter and examples in Collett (2023).
+
+```{r}
+data(package = "sta310")$results[, "Item"]
+```
+
+The data sets used most often in the lectures are `iud`, `breast`, `myeloma`,
+`ovarian`, `liver` and `rats`. As an example, `iud` holds the time to
+discontinuation of the use of an IUD for 18 women:
+
+```{r}
+iud
+```
+
+## The Kaplan-Meier estimator
+
+`km_estimate()` performs the product-limit calculation directly and returns the
+risk set, the number of events and censorings, the survivor function and the
+Greenwood standard error at every event time:
+
+```{r}
+km <- km_estimate(iud$time, iud$status)
+km
+```
+
+The result agrees with `survival::survfit()` at the event times:
+
+```{r}
+sf <- survival::survfit(survival::Surv(time, status) ~ 1, data = iud)
+cbind(
+  km_estimate = km$survival[-1],
+  survfit = unname(sf$surv[sf$n.event > 0])
+)
+```
+
+`km_estimate()` follows the `conf.type` argument of `survfit()`: `conf_type`
+selects the scale of the confidence interval, and `truncate = FALSE` shows the
+raw Wald interval, which for small samples leaves the interval `[0, 1]`:
+
+```{r}
+km_estimate(iud$time, iud$status, conf_type = "plain", truncate = FALSE)
+```
+
+`plot_km()` draws the estimate as a step function with an optional confidence
+band and requires ggplot2:
+
+```{r km-plot, eval = requireNamespace("ggplot2", quietly = TRUE)}
+plot_km(km)
+```
+
+## Cox regression fitted from first principles
+
+`cox_fit()` maximises the partial likelihood with Newton-Raphson and handles
+tied event times with the Breslow or Efron approximation. Factors have to be
+expanded before the call, and the intercept column must be dropped, because a
+Cox model has no intercept:
+
+```{r}
+fit <- cox_fit(myeloma$time, myeloma$status, myeloma[, c("age", "bun")])
+fit
+```
+
+```{r}
+x <- stats::model.matrix(~ factor(group), data = bmt_leukaemia)[, -1, drop = FALSE]
+cox_fit(bmt_leukaemia$time, bmt_leukaemia$status, x)
+```
+
+The coefficients, standard errors and log-likelihood agree with
+`survival::coxph()`:
+
+```{r}
+ref <- survival::coxph(survival::Surv(time, status) ~ age + bun, data = myeloma)
+cbind(cox_fit = coef(fit), coxph = coef(ref))
+```
+
+## Empirical hazards
+
+`emp_hazard()` estimates the hazard by a piecewise constant function: events
+divided by the person-time at risk in each interval. Censored observations
+contribute person-time but no event. This is the estimator used in the lectures
+to show how a frailty model produces a decreasing population hazard even when
+every individual has a constant hazard.
+
+```{r}
+emp_hazard(iud$time, breaks = seq(0, 130, by = 26), status = iud$status)
+```
+
+## Sample size and power for the log-rank test
+
+`n_events_logrank()` gives the number of events required by Schoenfeld's
+formula, and `power_logrank()` is the inverse calculation. Collett's worked
+example compares a five-year survival of 0.41 with 0.60:
+
+```{r}
+hr <- log(0.60) / log(0.41)
+hr
+n_events_logrank(hr)
+ceiling(n_events_logrank(hr))
+power_logrank(d = 140, hr = 0.57)
+```
+
+`power_logrank_sim()` simulates trials with exponential survival times and
+estimates the power by simulation instead, which is useful when proportional
+hazards, no loss to follow-up or a fixed number of events cannot be assumed:
+
+```{r}
+power_logrank_sim(
+  n = 400,
+  hr = 0.57,
+  lambda0 = -log(0.41) / 60,
+  accrual = 18,
+  followup = 24,
+  nsim = 200,
+  seed = 1
+)
+```
+
+## Competing risks
+
+`cif_cause_specific()` builds the cumulative incidence function for each cause
+from cause-specific Cox models, with the other causes treated as censored:
+
+```{r}
+cause_specific <- list(
+  thrombosis = survival::coxph(survival::Surv(time, cof == 2) ~ age, data = liver),
+  other = survival::coxph(survival::Surv(time, cof == 4) ~ age, data = liver)
+)
+cif <- cif_cause_specific(
+  cause_specific,
+  newdata = data.frame(age = 60),
+  times = c(365, 1825)
+)
+round(cif, 3)
+```
+
+The overall event-free survival that the integral is built on is attached to the
+result:
+
+```{r}
+attr(cif, "survival")
+```

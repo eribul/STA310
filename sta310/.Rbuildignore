@@ -1,0 +1,11 @@
+^sta310\.Rproj$
+^\.Rproj\.user$
+^data-raw$
+^_pkgdown\.yml$
+^pkgdown$
+^\.github$
+^LICENSE\.md$
+^README\.Rmd$
+^doc$
+^Meta$
+^CRAN-SUBMISSION$

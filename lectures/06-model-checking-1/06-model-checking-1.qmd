@@ -241,7 +241,7 @@ bind_rows(
 
 ## Reading the plot
 
-- `bun`: the smooth is flat (well ...) over the bulk (median `r median(myeloma$bun)`) and rises only in the sparse upper tail — `r sum(myeloma$bun > 50)` patients have `bun` > 50 (`r sum(myeloma$status[myeloma$bun > 50])` died). That rise rests on a handful of points, so the plot is too noisy to settle `bun`'s functional form. Skew is a reason to *check* `log(bun)`, but a linear term is actually preferred here (lower AIC).
+- `bun`: the smooth is flat (or ...? Compare to fig 4.8 in the book!) over the bulk (median `r median(myeloma$bun)`) and rises only in the sparse upper tail — `r sum(myeloma$bun > 50)` patients have `bun` > 50 (`r sum(myeloma$status[myeloma$bun > 50])` died). That rise rests on a handful of points, so the plot is too noisy to settle `bun`'s functional form. Skew is a reason to *check* `log(bun)^2`, but a linear term is actually preferred here (AIC).
 - `hb`: the smooth is not a straight line — it rises at low `hb`, falls through the middle, then turns back up near `hb` = 14. Low `hb` is clearly high risk (`r sum(myeloma$status[myeloma$hb < 6])` of `r sum(myeloma$hb < 6)` with `hb` < 6 died); the ends are small clusters, not empty. With `r nrow(myeloma)` patients the functional form is hard to pin down.
 
 ::: {.callout-important}
