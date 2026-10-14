@@ -11,8 +11,8 @@ Description: The data sets that accompany Collett (2023), "Modelling Survival
     Newton-Raphson, empirical hazards, log-rank power and sample size, and
     cumulative incidence functions from cause-specific hazards.
 License: MIT + file LICENSE
-URL: https://github.com/eriklgb/STA310,
-    https://eriklgb.github.io/STA310/
+URL: https://github.com/eribul/STA310,
+    https://eribul.github.io/STA310/sta310/
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 Depends:
@@ -23,6 +23,7 @@ Imports:
     utils
 Suggests:
     broom,
+    broom.helpers,
     cmprsk,
     dplyr,
     flexsurv,

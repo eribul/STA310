@@ -1,14 +1,20 @@
-name: Build and deploy study app to GitHub Pages
+name: Build and deploy the site (study app and package documentation)
 
-# Applies when this whole repository is pushed to GitHub and the Vite app lives
-# in the sta310-study/ sub-folder. If you instead push sta310-study/ as its own
-# repository, use the workflow in sta310-study/.github/workflows/deploy-pages.yml.
+# One GitHub Pages site per repository, so the two parts of the site are built
+# separately and deployed together: the study app (sta310-study/) from the root
+# and the pkgdown site for the R package (sta310/) from /sta310/.
+#
+# Two independent deploy-pages workflows would overwrite each other, because
+# each deployment replaces the whole site. upload-pages-artifact can only be
+# used once per deployment, which is why the parts are assembled into a single
+# directory in the deploy job.
 
 on:
   push:
     branches: [main]
     paths:
       - 'sta310-study/**'
+      - 'sta310/**'
       - '.github/workflows/deploy-pages.yml'
   workflow_dispatch:
 
@@ -23,8 +29,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Test and build
+  app:
+    name: Study app
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -49,22 +55,83 @@ jobs:
       - name: Build the static site
         run: npm run build
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload the build output
-        uses: actions/upload-pages-artifact@v3
+      - name: Upload the study app
+        uses: actions/upload-artifact@v4
         with:
+          name: study-app
           path: sta310-study/dist
+          retention-days: 1
+
+  docs:
+    name: Package documentation
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Pandoc
+        uses: r-lib/actions/setup-pandoc@v2
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      # `dependencies` defaults to "all", so the packages used by the
+      # vignettes (tidyverse, ggsurvfit, gtsummary, ...) are installed too.
+      - name: Install dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: sta310
+          extra-packages: any::pkgdown
+          needs: website
+
+      # install = TRUE lets pkgdown install the package from its source
+      # directory before building the site.
+      - name: Build the package site
+        working-directory: sta310
+        run: pkgdown::build_site_github_pages(new_process = FALSE, install = TRUE)
+        shell: Rscript {0}
+
+      - name: Upload the package documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-docs
+          path: sta310/docs
+          retention-days: 1
 
   deploy:
     name: Deploy
-    needs: build
+    needs: [app, docs]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # The study app goes to the root of the site, the package documentation
+      # to /sta310/, which is the URL configured in sta310/_pkgdown.yml.
+      - name: Download the study app
+        uses: actions/download-artifact@v4
+        with:
+          name: study-app
+          path: site
+
+      - name: Download the package documentation
+        uses: actions/download-artifact@v4
+        with:
+          name: package-docs
+          path: site/sta310
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

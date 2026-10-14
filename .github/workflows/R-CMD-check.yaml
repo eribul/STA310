@@ -1,0 +1,55 @@
+name: R-CMD-check
+
+# The package lives in sta310/, so the workflow is scoped to that directory and
+# every R step runs with working-directory: sta310.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sta310/**'
+      - '.github/workflows/R-CMD-check.yaml'
+  pull_request:
+    paths:
+      - 'sta310/**'
+      - '.github/workflows/R-CMD-check.yaml'
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  R-CMD-check:
+    name: ubuntu-latest (release)
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Pandoc
+        uses: r-lib/actions/setup-pandoc@v2
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      # `dependencies` defaults to "all", so the packages needed by the
+      # vignettes and the tests (tidyverse, ggsurvfit, gtsummary, ...) are
+      # installed too.
+      - name: Install dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: sta310
+          extra-packages: any::rcmdcheck
+          needs: check
+
+      - name: Check the package
+        uses: r-lib/actions/check-r-package@v2
+        with:
+          working-directory: sta310
+          args: 'c("--no-manual", "--as-cran")'
+          build_args: 'c("--no-manual")'
+          upload-snapshots: true

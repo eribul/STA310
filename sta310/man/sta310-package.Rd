@@ -48,8 +48,8 @@ Chapman & Hall/CRC.
 \seealso{
 Useful links:
 \itemize{
-  \item \url{https://github.com/eriklgb/STA310}
-  \item \url{https://eriklgb.github.io/STA310/}
+  \item \url{https://github.com/eribul/STA310}
+  \item \url{https://eribul.github.io/STA310/sta310/}
 }
 
 }

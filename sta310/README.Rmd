@@ -8,6 +8,11 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 
 # sta310
 
+<!-- badges: start -->
+[![R-CMD-check](https://github.com/eribul/STA310/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/eribul/STA310/actions/workflows/R-CMD-check.yaml)
+[![Package documentation](https://img.shields.io/badge/docs-eribul.github.io%2FSTA310%2Fsta310-blue)](https://eribul.github.io/STA310/sta310/)
+<!-- badges: end -->
+
 `sta310` collects the data sets that accompany Collett (2023), *Modelling
 Survival Data in Medical Research* (4th edition), together with a small set of
 teaching functions that implement the estimators used in the STA310 course at
@@ -22,7 +27,7 @@ The package lives in the `sta310/` directory of the course repository, so
 `subdir` has to be given:
 
 ```{r, eval = FALSE}
-devtools::install_github("eriklgb/STA310", subdir = "sta310")
+devtools::install_github("eribul/STA310", subdir = "sta310")
 ```
 
 ## Data sets
@@ -84,7 +89,8 @@ cbind(cox_fit = coef(fit), coxph = coef(ref))
 See `vignette("sta310")` for a walk-through of the data sets and the teaching
 functions, and `vignette("cs1-survival-analysis")` for the first computer
 exercise, which has the solutions to all its questions hidden behind
-*Show solution*. Both are HTML documents.
+*Show solution*. Both are HTML documents. The same material, with a complete
+reference index, is online at <https://eribul.github.io/STA310/sta310/>.
 
 ## Course material
 
