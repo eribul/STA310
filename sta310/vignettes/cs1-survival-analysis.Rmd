@@ -56,8 +56,7 @@ This exercise follows the lecture *Survival analysis* and the corresponding part
 - **Chapter 3** — Cox proportional hazards regression and hazard ratios
 - **Section 4.4** — checking the proportional hazards assumption
 
-The exercise is not mandatory, but it is strongly recommended before the mandatory computer
-exercise 2 (CS2). Sections 1–6 each contain a short introduction, worked R code that you should run
+Sections 1–6 each contain a short introduction, worked R code that you should run
 yourself, and questions to answer. The answers to all questions are included in this document but
 are **hidden by default**: click *Show solution* to reveal one.
 
@@ -322,7 +321,7 @@ producing a step in the curve.
 </details>
 
 **7.** Describe the shape of the Kaplan–Meier curve in the figure. What does the long, almost flat
-part after about 60 months mean, and why is the confidence band so wide there?
+part after about 60 months mean.
 
 <details class="solution">
 <summary>Show solution</summary>
@@ -332,12 +331,6 @@ the diagnosis of metastatic disease — and then flattens out. The horizontal li
 crosses the curve at the median, 13.3 months. After about 60 months the curve is almost flat: only a
 small subgroup of patients is still under observation, and few further deaths are observed among
 them.
-
-The confidence band is very wide at the right-hand end because very few patients remain at risk
-(only 9 at 60 months, as the risk table shows). Each step is then based on a tiny risk set, so the
-estimate is very uncertain. This is why survival estimates at the extreme right of a Kaplan–Meier
-curve should be interpreted with caution, and why medians/percentiles are primarily reported for
-times where the curve is reasonably stable.
 
 </details>
 
@@ -574,12 +567,15 @@ event_times <- sort(unique(mbc$observed_time[mbc$status == 1]))
 
 observed <- expected <- variance <- 0
 for (t in event_times) {
-  n   <- sum(mbc$observed_time >= t)                                        # all at risk at t
-  n1  <- sum(mbc$observed_time >= t & mbc$hormone_receptor == "HR-negative") # at risk, HR-neg
-  n2  <- n - n1                                                             # at risk, HR-pos
-  d   <- sum(mbc$observed_time == t & mbc$status == 1)                      # deaths at t
-  d1  <- sum(mbc$observed_time == t & mbc$status == 1 &
-               mbc$hormone_receptor == "HR-negative")                       # deaths at t, HR-neg
+  n <- sum(mbc$observed_time >= t) # all at risk at t
+  n1 <- sum(mbc$observed_time >= t & mbc$hormone_receptor == "HR-negative") # at risk, HR-neg
+  n2 <- n - n1 # at risk, HR-pos
+  d <- sum(mbc$observed_time == t & mbc$status == 1) # deaths at t
+  d1 <- sum(
+    mbc$observed_time == t &
+      mbc$status == 1 &
+      mbc$hormone_receptor == "HR-negative"
+  ) # deaths at t, HR-neg
 
   observed <- observed + d1
   expected <- expected + d * n1 / n
@@ -617,7 +613,10 @@ proportional hazards across ECOG levels (though it still assumes proportional ha
 hormone-receptor groups within strata).
 
 ```{r}
-survdiff(Surv(observed_time, status) ~ hormone_receptor + strata(ecog_ps), data = mbc)
+survdiff(
+  Surv(observed_time, status) ~ hormone_receptor + strata(ecog_ps),
+  data = mbc
+)
 ```
 
 Stratifying on ECOG gives $\chi^2 = 41$ on 1 degree of freedom, **p = 2 \times 10^{-10}$**, compared
@@ -693,8 +692,11 @@ mbc_model <- mbc |>
   )
 
 cox_multi <- coxph(
-  Surv(observed_time, status) ~ hormone_receptor + her2_status +
-    n_metastatic_sites + ecog_ps + age_dec,
+  Surv(observed_time, status) ~ hormone_receptor +
+    her2_status +
+    n_metastatic_sites +
+    ecog_ps +
+    age_dec,
   data = mbc_model
 )
 
@@ -824,12 +826,8 @@ proportional hazards assumption for `hormone_receptor`?
 <details class="solution">
 <summary>Show solution</summary>
 
-The two curves are roughly parallel over the whole follow-up, with the HR-negative
-curve consistently above the HR-positive curve (as expected, since HR-negative patients have the
-higher hazard). The vertical distance between the curves is approximately constant, which is what
-proportional hazards means; there is no crossing of the curves. The plot therefore gives **no
-evidence against** proportional hazards for `hormone_receptor`, consistent with the formal test in
-Question 21 (univariable `cox.zph`: p = 0.92).
+
+The HR-negative curve remains consistently above the HR-positive curve, indicating poorer survival among HR-negative patients. The curves are close together initially, but the vertical distance increases during the first 10–15 months. Thereafter, the curves appear approximately parallel, although some variation in their separation remains. The confidence intervals widen towards the end of follow-up, particularly for the HR-negative group, where fewer patients remain at risk. Overall, the plot suggests some variation in the hazard ratio over time, particularly early in follow-up, but no strong evidence of a substantial violation of the proportional hazards assumption. This is consistent with the formal test in Question 21, which provides no statistical evidence against proportional hazards for hormone_receptor.
 
 Note that the curves become unstable at the far right (few patients at risk), so judgement should
 focus on the region where the risk set is adequate.

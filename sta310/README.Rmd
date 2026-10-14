@@ -30,6 +30,25 @@ The package lives in the `sta310/` directory of the course repository, so
 devtools::install_github("eribul/STA310", subdir = "sta310")
 ```
 
+That install does not build the vignettes. They are only indexed if you ask for
+them to be built, which requires pandoc and the packages listed under
+`Suggests`:
+
+```{r, eval = FALSE}
+devtools::install_github(
+  "eribul/STA310",
+  subdir = "sta310",
+  build_vignettes = TRUE,
+  dependencies = TRUE
+)
+```
+
+Without `build_vignettes = TRUE`, `vignette(package = "sta310")` reports that no
+vignettes were found, because the vignette sources are only indexed when they are
+built at install time. With it, `vignette("cs1-survival-analysis")` and
+`browseVignettes("sta310")` work as usual. Either way, both vignettes are always
+available as HTML at <https://eribul.github.io/STA310/sta310/articles/>.
+
 ## Data sets
 
 All 33 data sets from the book are available under the object names used in the
