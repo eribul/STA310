@@ -28,6 +28,20 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
 
+      # inst/doc/ innehåller färdigbyggda vignetter, så att vignette() fungerar
+      # även när installationen inte bygger dem (dev/refresh-vignettes.sh).
+      # Ändras vignetternas källfiler i en push utan att inst/doc/ ändras i
+      # samma push är de incheckade HTML-filerna inaktuella.
+      - name: Check that the pre-built vignettes are up to date
+        working-directory: sta310
+        run: |
+          src=$(git log -1 --format=%ct -- vignettes)
+          doc=$(git log -1 --format=%ct -- inst/doc)
+          if [ "${src:-0}" -gt "${doc:-0}" ]; then
+            echo "::error::vignettes/ changed without inst/doc/ being updated - run dev/refresh-vignettes.sh and commit the result."
+            exit 1
+          fi
+
       - name: Set up Pandoc
         uses: r-lib/actions/setup-pandoc@v2
 

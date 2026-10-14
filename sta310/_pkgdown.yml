@@ -3,6 +3,20 @@ url: https://eribul.github.io/STA310/sta310/
 template:
   bootstrap: 5
 
+articles:
+- title: Computer exercise 1
+  desc: >
+    The exercise and its solutions, in two separate documents that share the
+    same numbering.
+  contents:
+  - cs1-survival-analysis
+  - cs1-solutions
+- title: Getting started
+  desc: >
+    A walk-through of the data sets and the teaching functions.
+  contents:
+  - sta310
+
 reference:
 - title: Teaching functions
   desc: >

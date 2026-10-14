@@ -30,9 +30,11 @@ The package lives in the `sta310/` directory of the course repository, so
 devtools::install_github("eribul/STA310", subdir = "sta310")
 ```
 
-That install does not build the vignettes. They are only indexed if you ask for
-them to be built, which requires pandoc and the packages listed under
-`Suggests`:
+That install does not build the vignettes, so the package ships them as pre-built
+HTML files: `vignette(package = "sta310")`, `vignette("cs1-survival-analysis")`
+and `browseVignettes("sta310")` work without pandoc and without the packages
+listed under `Suggests`. To rebuild them from source instead, pass
+`build_vignettes = TRUE`:
 
 ```{r, eval = FALSE}
 devtools::install_github(
@@ -43,11 +45,8 @@ devtools::install_github(
 )
 ```
 
-Without `build_vignettes = TRUE`, `vignette(package = "sta310")` reports that no
-vignettes were found, because the vignette sources are only indexed when they are
-built at install time. With it, `vignette("cs1-survival-analysis")` and
-`browseVignettes("sta310")` work as usual. Either way, both vignettes are always
-available as HTML at <https://eribul.github.io/STA310/sta310/articles/>.
+The vignettes are also available as HTML at
+<https://eribul.github.io/STA310/sta310/articles/>.
 
 ## Data sets
 
@@ -107,9 +106,10 @@ cbind(cox_fit = coef(fit), coxph = coef(ref))
 
 See `vignette("sta310")` for a walk-through of the data sets and the teaching
 functions, and `vignette("cs1-survival-analysis")` for the first computer
-exercise, which has the solutions to all its questions hidden behind
-*Show solution*. Both are HTML documents. The same material, with a complete
-reference index, is online at <https://eribul.github.io/STA310/sta310/>.
+exercise. The solutions are a separate document, `vignette("cs1-solutions")`,
+with the same question numbering as the exercise. All three are HTML documents.
+The same material, with a complete reference index, is online at
+<https://eribul.github.io/STA310/sta310/>.
 
 ## Course material
 

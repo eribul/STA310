@@ -19,6 +19,10 @@ knitr::opts_chunk$set(
   message = FALSE,
   warning = FALSE
 )
+
+# A fixed seed, only so that the element ids that gt gives its tables are
+# reproducible: then inst/doc/ only changes when the text changes.
+set.seed(1014)
 ```
 
 <style>
@@ -27,21 +31,6 @@ knitr::opts_chunk$set(
   background: #f1f5fb;
   padding: 0.75em 1em;
   margin: 1em 0;
-}
-details.solution {
-  margin: 0.5em 0 1.25em;
-  padding: 0.25em 0.85em;
-  border-left: 3px solid #adb5bd;
-  background: #fafafa;
-}
-details.solution > summary {
-  cursor: pointer;
-  font-weight: 600;
-  color: #0d6efd;
-  padding: 0.25em 0;
-}
-details.solution[open] > summary {
-  margin-bottom: 0.5em;
 }
 </style>
 
@@ -57,8 +46,9 @@ This exercise follows the lecture *Survival analysis* and the corresponding part
 - **Section 4.4** — checking the proportional hazards assumption
 
 Sections 1–6 each contain a short introduction, worked R code that you should run
-yourself, and questions to answer. The answers to all questions are included in this document but
-are **hidden by default**: click *Show solution* to reveal one.
+yourself, and questions to answer. The solutions are in a separate document, [Computer exercise 1:
+solutions](cs1-solutions.html) (`vignette("cs1-solutions")`), which uses the same numbering as this
+exercise.
 
 The data are a synthetic Scottish metastatic breast cancer (MBC) cohort, `scottish_mbc_cohort`,
 which is distributed with this package. It is not one of the data sets from Collett (2023) — it
@@ -133,53 +123,8 @@ still event-free at $t$.
 (d) What does `status = 0` mean?
 (e) Name two reasons why a patient in this cohort could be censored.
 
-<details class="solution">
-<summary>Show solution</summary>
-
-(a) The time origin is the **date of diagnosis** of metastatic breast cancer. In the data only
-`observed_time` is stored, but it is measured from diagnosis.
-
-(b) The time scale is **time since diagnosis**, measured in **months** (values such as 40.8 and 13.6
-are months; the maximum is 71.2 months = about 6 years).
-
-(c) The event of interest is **death** (death from any cause, as the indicator is simply `status`).
-
-(d) `status = 0` means the patient was **right-censored**: she was still alive at the end of
-follow-up, so we only know that her true survival time is longer than `observed_time`.
-
-(e) Typical reasons: (i) **administrative censoring** — the patient was still alive when the study
-period ended / at data cut-off; (ii) **loss to follow-up** — the patient moved, transferred to
-another clinic or withdrew. In this synthetic cohort all censoring is administrative, but in real
-data both occur.
-
-</details>
-
 **2.** Describe the cohort numerically: how many patients are there, how many deaths, how many
 censored observations, and what percentage is censored? What is the range of the follow-up times?
-
-<details class="solution">
-<summary>Show solution</summary>
-
-```{r}
-table(mbc$status)
-mbc |>
-  summarise(
-    n = n(),
-    deaths = sum(status == 1),
-    censored = sum(status == 0),
-    pct_censored = round(100 * mean(status == 0), 1),
-    min_time = min(observed_time),
-    max_time = max(observed_time)
-  ) |>
-  knitr::kable()
-```
-
-There are **850 patients**, of whom **703 died** and **147 (17.3 %)** were censored. The observed
-follow-up times range from **0.5 to 71.2 months**. The censoring proportion is fairly low, which is
-typical for a metastatic cancer cohort with long follow-up: most patients experience the event
-within the study period.
-
-</details>
 
 **3.** True or false? Justify each answer briefly.
 
@@ -190,57 +135,8 @@ within the study period.
 (e) Left-censoring means that the true event time is smaller than the observed time, and interval
 censoring means that the event time is known only to lie within an interval.
 
-<details class="solution">
-<summary>Show solution</summary>
-
-(a) **False.** The patient contributes follow-up time up to 10 months and is then removed from the
-risk set. She is *not* at risk at 12 months. This is exactly how censoring enters the Kaplan–Meier
-estimator: censored subjects reduce the size of the risk set at later event times, but no event is
-counted for them.
-
-(b) **False.** Informative censoring can bias the estimate in **either direction**. If sicker
-patients drop out (e.g. because they become too unwell to attend), their future deaths are missing
-and survival looks *better* than it is (upward bias). If patients who are doing well leave the study,
-survival looks *worse* (downward bias). The sign depends on how censoring is related to prognosis.
-
-(c) **False.** The hazard is an **instantaneous rate**, not a probability. In the lecture
-$h(t) = \lim_{\Delta t \to 0} P(t \le T < t + \Delta t \mid T \ge t)/\Delta t$, so $h(t)$ can take
-any value from 0 to $\infty$ and is not bounded by 1. A probability of dying in a short interval
-would be approximately $h(t)\,\Delta t$.
-
-(d) **False.** Because survival times are right-skewed (a few long survivors), the median (and other
-percentiles) is preferred. The mean is influenced by the extreme tail and is often poorly estimated
-unless follow-up is complete.
-
-(e) **True.** *Left-censoring* means that the true event time is smaller than the observed time — for
-example, a patient who is first examined for a condition that had already started earlier. *Interval
-censoring* means that we only know that the event happened somewhere between two examination times.
-The MBC cohort has neither: here all censoring is right-censoring.
-
-</details>
-
 **4.** Explain why a logistic regression of `status` on the covariates is *not* the right model for
 these data. What extra information does a survival analysis use that logistic regression throws away?
-
-<details class="solution">
-<summary>Show solution</summary>
-
-Two things are lost in logistic regression:
-
-- **Time.** Logistic regression only distinguishes "died" from "not died at the end of follow-up".
-  It does not use *when* the death occurred, so a patient who dies after 2 months and one who dies
-  after 6 years contribute equally. Survival analysis uses the full follow-up time.
-- **Censoring.** Patients who are censored are neither events nor properly "non-events": we know only
-  that they survived until their censoring time. Logistic regression would have to call them
-  survivors, which treats incomplete follow-up as if it were complete, and this **overestimates
-  survival** (see Question 8). Survival methods use the follow-up time of censored patients up to the
-  point of censoring.
-
-Moreover, survival time is positive and right-skewed, so ordinary linear regression of the time on
-the covariates is inappropriate too. The Cox model instead models the **hazard** and estimates
-**hazard ratios**, which is the natural effect measure for time-to-event data.
-
-</details>
 
 ## 2. The survivor function and the Kaplan–Meier estimator
 
@@ -282,19 +178,6 @@ survfit2(Surv(observed_time, status) ~ 1, data = mbc) |>
 
 Interpret each number in words.
 
-<details class="solution">
-<summary>Show solution</summary>
-
-- **Median survival** is **13.3 months** (95 % CI 12.3–15.1). This is the smallest event time at
-  which the estimated survivor function has dropped to 0.5 or below: half of the patients have died
-  within about 13 months of diagnosis.
-- **$\hat S(12) = 0.542$** (95 % CI 0.510–0.577). An estimated 54 % of patients survive at least
-  12 months (1 year).
-- **$\hat S(24) = 0.303$** (95 % CI 0.273–0.337). An estimated 30 % survive at least 24 months
-  (2 years).
-
-</details>
-
 **6.** Look at the `n.risk` column of the summary output.
 
 (a) How many patients are still at risk just before 6, 12 and 24 months?
@@ -302,37 +185,8 @@ Interpret each number in words.
 Kaplan–Meier estimate change there — does the curve drop or stay flat? Why?
 (c) The number at risk falls much faster than the number of deaths. Explain.
 
-<details class="solution">
-<summary>Show solution</summary>
-
-(a) The number at risk just before the time point is **626** at 6 months, **463** at 12 months and
-**207** at 24 months.
-
-(b) The curve **stays flat** at a censoring time. The Kaplan–Meier estimate only has steps
-("drops") at **event** times, where the factor $(1 - d_j/n_j) < 1$. At a censored observation
-$d_j = 0$, so the factor is $1$ and the estimate is unchanged; the only effect of censoring is that
-it **reduces the risk set** for later event times (and thereby increases the size of later steps).
-
-(c) The risk set shrinks for two reasons: patients die (events) *and* patients are censored. Between
-6 and 24 months, for example, many patients both die and reach the end of their follow-up, so the
-number at risk falls from 626 to 207. Censoring removes people from the denominator without
-producing a step in the curve.
-
-</details>
-
 **7.** Describe the shape of the Kaplan–Meier curve in the figure. What does the long, almost flat
 part after about 60 months mean.
-
-<details class="solution">
-<summary>Show solution</summary>
-
-The curve falls steeply during the first 12–24 months — the risk of death is highest shortly after
-the diagnosis of metastatic disease — and then flattens out. The horizontal line at $S = 0.5$
-crosses the curve at the median, 13.3 months. After about 60 months the curve is almost flat: only a
-small subgroup of patients is still under observation, and few further deaths are observed among
-them.
-
-</details>
 
 **8.** A colleague ignores censoring and estimates 2-year survival as "the proportion of patients
 who did not die within 24 months", i.e. $1 - (\text{deaths within 24 months})/850$. Compute this
@@ -340,62 +194,10 @@ naive estimate and compare it with the Kaplan–Meier estimate from Question 5. 
 the naive estimate biased, and why? Would the problem be worse or less serious in a study with more
 censoring?
 
-<details class="solution">
-<summary>Show solution</summary>
-
-```{r}
-deaths_24 <- sum(mbc$observed_time <= 24 & mbc$status == 1)
-censored_24 <- sum(mbc$observed_time <= 24 & mbc$status == 0)
-
-naive <- 1 - deaths_24 / nrow(mbc)
-c(
-  deaths_within_24 = deaths_24,
-  censored_within_24 = censored_24,
-  naive_2y = round(naive, 3)
-)
-```
-
-The naive estimate is $1 - 573/850 = 0.326$, compared with the Kaplan–Meier estimate
-$\hat S(24) = 0.303$. The naive value is **biased upwards**: **71 patients were censored before
-24 months** and the formula silently counts them as if they had survived all 24 months, even though
-we do not know that. Kaplan–Meier removes them from the risk set at their censoring time instead.
-
-The bias is modest here because only 17 % of the patients are censored. In a study with heavy
-censoring (e.g. short follow-up or many drop-outs) the naive estimate could be badly wrong, which is
-exactly why censoring-aware methods are needed.
-
-</details>
-
 **9.** Fit and plot the survivor function separately for the two hormone-receptor groups
 (`hormone_receptor`). Report the median survival time for each group and interpret the curves.
 Does the plot suggest that the two groups differ? *Hint:* reuse the code above with
 `Surv(observed_time, status) ~ hormone_receptor`.
-
-<details class="solution">
-<summary>Show solution</summary>
-
-```{r}
-#| fig-width: 7
-#| fig-height: 5
-#| fig-dpi: 150
-km_hr <- survfit2(Surv(observed_time, status) ~ hormone_receptor, data = mbc)
-
-km_hr |>
-  ggsurvfit() +
-  add_confidence_interval() +
-  add_risktable() +
-  labs(x = "Time since diagnosis (months)", y = "Survival probability")
-
-km_hr
-```
-
-Median survival is **8.6 months** (95 % CI 7.2–10.5) for HR-negative patients and **15.7 months**
-(95 % CI 13.7–17.6) for HR-positive patients. At 24 months, survival is 0.168 for HR-negative and
-0.342 for HR-positive patients. The HR-positive curve lies clearly above the HR-negative curve
-throughout, so patients with hormone-receptor-positive tumours appear to live longer after a
-metastatic diagnosis. Whether the difference is statistically significant is tested in Question 12.
-
-</details>
 
 ## 3. Hazard and cumulative hazard
 
@@ -432,35 +234,9 @@ tibble(
 **10.** Interpret the cumulative hazard curves. Which group accumulates risk faster, and what does
 the *slope* of a cumulative hazard curve represent?
 
-<details class="solution">
-<summary>Show solution</summary>
-
-The HR-negative curve rises faster and stays above the HR-positive curve, so HR-negative patients
-accumulate risk (hazard) more quickly — consistent with their worse survival in Question 9. At
-24 months the cumulative hazard is roughly $-\log(0.168) \approx 1.8$ for HR-negative and
-$-\log(0.342) \approx 1.07$ for HR-positive patients.
-
-The **slope** of the cumulative hazard curve at a given time is the instantaneous hazard $h(t)$.
-A roughly straight cumulative hazard curve therefore corresponds to a roughly constant hazard
-(exponential-type survival); a steepening curve means the hazard is increasing over time.
-
-</details>
-
 **11.** The `cumhaz` component of a `survfit` object is the Nelson–Aalen estimate of $H(t)$. The
 table above compares it with $-\log \hat S(t)$ (the Kaplan–Meier-based estimate of the cumulative
 hazard) at $t = 12$ and $t = 24$ months. They agree closely but not exactly — why?
-
-<details class="solution">
-<summary>Show solution</summary>
-
-At 12 months the Nelson–Aalen estimate is 0.610 and $-\log \hat S(12) = 0.612$; at
-24 months they are 1.189 and 1.194. $H(t) = -\log S(t)$ holds for the *true* functions in continuous
-time. Nelson–Aalen sums the increments $d_j/n_j$, whereas the Kaplan–Meier approach multiplies
-factors $(1 - d_j/n_j)$ and then takes the log; the difference is of second order in $d_j/n_j$ and is
-small when the risk set is large (i.e. for small $t$, large $n$). This matches the lecture's remark
-that the two estimators give very similar results, especially for small $t$ with large $n$.
-
-</details>
 
 ## 4. The log-rank test
 
@@ -480,22 +256,6 @@ lr_hr
 **12.** Use the output to report the observed and expected numbers of deaths in each group, the test
 statistic with degrees of freedom, and the p-value. State the conclusion in clinical language.
 
-<details class="solution">
-<summary>Show solution</summary>
-
-In the HR-negative group there were **176 observed deaths** against **119.0 expected**
-under the null hypothesis; in the HR-positive group there were **527 observed** against **584.0
-expected**. HR-negative patients die more often than expected if the groups were the same, and
-HR-positive patients less often. The test statistic is $\chi^2 = 33.5$ on **1 degree of freedom**,
-**p = 7 \times 10^{-9}**.
-
-Conclusion: there is strong evidence that survival differs between the hormone-receptor groups, with
-**worse survival for HR-negative patients**. The log-rank test tells us that the groups differ; it
-does not by itself quantify the size of the difference — that is the job of the Cox model in
-Question 16.
-
-</details>
-
 **13.** Survival is also related to ECOG performance status, which has four groups (0, 1, 2, 3).
 Carry out a log-rank test comparing the four groups (replace `hormone_receptor` by `ecog_ps`).
 
@@ -503,50 +263,10 @@ Carry out a log-rank test comparing the four groups (replace `hormone_receptor` 
 (b) Report the test statistic, degrees of freedom and p-value.
 (c) A significant result tells you *that* the groups differ — what does it *not* tell you?
 
-<details class="solution">
-<summary>Show solution</summary>
-
-```{r}
-survdiff(Surv(observed_time, status) ~ ecog_ps, data = mbc)
-```
-
-(a) The null hypothesis is that **all four groups have the same survivor function**,
-$H_0: S_0(t) = S_1(t) = S_2(t) = S_3(t)$ for all $t$.
-
-(b) $\chi^2 = 84$ on **3 degrees of freedom**, **p < 2 \times 10^{-16}**.
-
-(c) This is an **omnibus (overall) test**. A significant result says that at least one group differs
-from the others, but not **which** groups differ, nor **who differs from whom**. Nor does it quantify
-the size of the differences — for that you need pairwise comparisons (with a multiplicity adjustment)
-or a regression model with the ECOG groups as a categorical covariate, which also adjusts for other
-variables.
-
-</details>
-
 **Bonus (weighted tests).** The log-rank test gives equal weight to all event times. Suppose you
 suspected that the two hormone-receptor groups differed mainly *early* after diagnosis, with the
 curves converging later. Which alternative test would put more weight on early differences, and how
 would you run it in R? Does it change the conclusion for `hormone_receptor`?
-
-<details class="solution">
-<summary>Show solution</summary>
-
-The **Wilcoxon-type test**, in R available as the Peto–Peto modification of the
-Gehan–Wilcoxon test through `survdiff(..., rho = 1)`, weights each death by $\hat S(t)^{\rho}$ with
-$\rho > 0$. With $\rho = 1$ late events are down-weighted relative to the log-rank test ($\rho = 0$),
-so early differences count more.
-
-```{r}
-survdiff(Surv(observed_time, status) ~ hormone_receptor, data = mbc, rho = 0) # log-rank
-survdiff(Surv(observed_time, status) ~ hormone_receptor, data = mbc, rho = 1) # Peto-Peto
-```
-
-The Peto–Peto test gives $\chi^2 = 28.2$, p = 1 × 10⁻⁷, still clearly significant, so the
-conclusion is unchanged. Here the log-rank test is slightly *more* significant, which is expected
-when the hazard ratio is roughly constant over time — that is precisely the situation in which the
-log-rank test is most powerful (Collett, Section 2.6.5).
-
-</details>
 
 **14.** The expected counts in `survdiff()` are built from the risk sets. Write a short loop that
 computes the observed and expected number of deaths for the **HR-negative** group directly, as
@@ -559,72 +279,10 @@ $$V = \sum_j \frac{d_j (n_j - d_j) n_{1j} n_{2j}}{n_j^2 (n_j - 1)}$$
 
 and the test statistic $(O - E)^2 / V$.
 
-<details class="solution">
-<summary>Show solution</summary>
-
-```{r}
-event_times <- sort(unique(mbc$observed_time[mbc$status == 1]))
-
-observed <- expected <- variance <- 0
-for (t in event_times) {
-  n <- sum(mbc$observed_time >= t) # all at risk at t
-  n1 <- sum(mbc$observed_time >= t & mbc$hormone_receptor == "HR-negative") # at risk, HR-neg
-  n2 <- n - n1 # at risk, HR-pos
-  d <- sum(mbc$observed_time == t & mbc$status == 1) # deaths at t
-  d1 <- sum(
-    mbc$observed_time == t &
-      mbc$status == 1 &
-      mbc$hormone_receptor == "HR-negative"
-  ) # deaths at t, HR-neg
-
-  observed <- observed + d1
-  expected <- expected + d * n1 / n
-  if (n > 1) {
-    variance <- variance + d * (n - d) * n1 * n2 / (n^2 * (n - 1))
-  }
-}
-
-c(
-  observed = observed,
-  expected = round(expected, 2),
-  o_minus_e_sq_over_e = round((observed - expected)^2 / expected, 2),
-  o_minus_e_sq_over_v = round((observed - expected)^2 / variance, 2)
-)
-```
-
-The loop gives $O = 176$ and $E = 118.98$, matching the `survdiff()` table (176 and 119.0). The
-$(O-E)^2/E$ component is 27.33 and $(O-E)^2/V$ is 33.51, which is the test statistic
-$\chi^2 = 33.5$ reported by `survdiff()` (for two groups $(O-E)^2/V$ is the correct statistic; the
-$(O-E)^2/E$ column is only a descriptive component).
-
-</details>
-
 **15.** A colleague wants to compare the hormone-receptor groups while **adjusting for ECOG
 performance status**, but does not want to assume proportional hazards. Which test would you use?
 Carry it out (*hint:* add `+ strata(ecog_ps)` to the right-hand side of the `survdiff()` formula) and
 compare the result with the unadjusted log-rank test.
-
-<details class="solution">
-<summary>Show solution</summary>
-
-Use a **stratified log-rank test**, which performs the comparison within each stratum of
-ECOG performance status and then combines the strata. It adjusts for ECOG without assuming
-proportional hazards across ECOG levels (though it still assumes proportional hazards between the
-hormone-receptor groups within strata).
-
-```{r}
-survdiff(
-  Surv(observed_time, status) ~ hormone_receptor + strata(ecog_ps),
-  data = mbc
-)
-```
-
-Stratifying on ECOG gives $\chi^2 = 41$ on 1 degree of freedom, **p = 2 \times 10^{-10}$**, compared
-with $\chi^2 = 33.5$ unadjusted. The evidence for a difference between hormone-receptor groups is
-actually **slightly stronger** after adjusting for ECOG, so the hormone-receptor effect is not
-explained by a different distribution of performance status between the groups.
-
-</details>
 
 ## 5. Cox proportional hazards regression
 
@@ -652,27 +310,6 @@ tbl_regression(cox_hr, exponentiate = TRUE)
 (c) Compute and interpret the hazard ratio for HR-negative *versus* HR-positive.
 (d) Compare the p-value with the log-rank p-value from Question 12.
 
-<details class="solution">
-<summary>Show solution</summary>
-
-(a) HR (HR-positive vs HR-negative) = **0.604**, 95 % CI **0.509–0.718**,
-**p = 9.7 \times 10^{-9}**.
-
-(b) At any point in time, HR-positive patients have about **40 % lower hazard** of death than
-HR-negative patients (0.60 times the hazard), i.e. they die at about 60 % of the rate of HR-negative
-patients.
-
-(c) The reference level is HR-negative, so the HR for HR-negative versus HR-positive is
-$1/0.604 = 1.66$: HR-negative patients have about **a 66 % higher hazard** of death. Note that this
-is *not* the same as saying that they are "66 % more likely to die" within a given time.
-
-(d) The p-value (9.7 × 10⁻⁹) is very close to the log-rank p-value (7 × 10⁻⁹). This is not a
-coincidence: the score test of the Cox model with a single binary covariate is essentially the
-log-rank test. The Cox model adds an **effect estimate** (the hazard ratio), which the log-rank test
-does not provide.
-
-</details>
-
 **17.** Fit a multivariable Cox model with `hormone_receptor`, `her2_status`, `n_metastatic_sites`,
 `ecog_ps` (as a factor) and age per 10 years as covariates. Present the hazard ratios in a table and
 interpret each one. Which variables are associated with survival after adjustment?
@@ -681,82 +318,13 @@ interpret each one. Which variables are associated with survival after adjustmen
 `mbc_model <- mbc |> mutate(ecog_ps = factor(ecog_ps), age_dec = age_at_diagnosis / 10)`, and use
 `tbl_regression(..., exponentiate = TRUE)`.
 
-<details class="solution">
-<summary>Show solution</summary>
-
-```{r}
-mbc_model <- mbc |>
-  mutate(
-    ecog_ps = factor(ecog_ps),
-    age_dec = age_at_diagnosis / 10
-  )
-
-cox_multi <- coxph(
-  Surv(observed_time, status) ~ hormone_receptor +
-    her2_status +
-    n_metastatic_sites +
-    ecog_ps +
-    age_dec,
-  data = mbc_model
-)
-
-tbl_regression(cox_multi, exponentiate = TRUE)
-```
-
-Interpretation (adjusted for all other variables in the model):
-
-- **Hormone receptor status:** HR-positive vs HR-negative HR = **0.55** (95 % CI 0.46–0.66),
-  p = 2.3 × 10⁻¹¹. HR-positive patients have about a 45 % lower hazard of death.
-- **HER2 status:** HR = **0.88** (0.72–1.07), p = 0.21 — no clear evidence of an association after
-  adjustment.
-- **Number of metastatic sites:** HR = **1.25** (1.17–1.34), p = 1.0 × 10⁻¹⁰ per additional site —
-  each extra metastatic site is associated with a 25 % higher hazard.
-- **ECOG performance status** (reference = 0): HR = **1.31** (1.08–1.58) for PS 1;
-  **2.49** (2.01–3.08) for PS 2; **2.80** (2.08–3.77) for PS 3. There is a strong, monotone
-  association: worse performance status means a higher hazard.
-- **Age:** HR = **1.16** (1.09–1.24), p = 2.0 × 10⁻⁶ per 10 years — older patients have a higher
-  hazard of death.
-
-So hormone receptor status, number of metastatic sites, performance status and age are all
-associated with survival after adjustment, whereas HER2 status is not clearly associated in this
-cohort.
-
-</details>
-
 **18.** The rule of thumb for a Cox (or logistic) regression is that the number of covariates should
 be less than (number of events in the smaller group)/10. How many events are there in this cohort?
 How many covariates can you afford? Is the model in Question 17 reasonable from this point of view?
 
-<details class="solution">
-<summary>Show solution</summary>
-
-There are **703 events** (deaths), so the rule of thumb allows up to about **70
-covariates** — far more than the 6 terms (7 coefficients, because ECOG is modelled with 3 dummies)
-used in Question 17. The model is therefore comfortably within the rule of thumb. This is a large
-cohort by survival-analysis standards; with a few hundred events, over-fitting from too many
-covariates would have been a real concern.
-
-</details>
-
 **Bonus (variable selection).** The lecture ends the Cox section with automatic variable selection
 (e.g. stepwise forward selection). What is the main statistical criticism of choosing the variables
 in a model by stepwise selection?
-
-<details class="solution">
-<summary>Show solution</summary>
-
-Stepwise selection uses the **same data twice**: first to choose the variables and then
-to estimate and test their effects. The reported p-values and confidence intervals then behave as if
-the model had been specified in advance, so they are **too optimistic** (the true uncertainty is
-larger). The selected model is also **unstable** — small changes in the data can change which
-variables enter — and it ignores subject-matter knowledge in favour of mechanical p-value thresholds.
-
-A better approach is to pre-specify the covariates from clinical knowledge (as in Question 17), or to
-use a method that accounts for the selection, such as penalised regression (the lasso for Cox models,
-Collett Section 3.7) combined with validation. Automatic selection is best used as an exploratory
-tool, not as the final analysis.
-
-</details>
 
 **19.** A colleague ignores the time-to-event nature of the data and fits a logistic regression of
 `status` on `hormone_receptor` instead (`glm(status ~ hormone_receptor, family = binomial)`).
@@ -765,39 +333,6 @@ tool, not as the final analysis.
 (b) Explain why the two measures differ.
 (c) Critique the following statement: *"Patients with HR-negative tumours were 2.5 times more likely
 to die."*
-
-<details class="solution">
-<summary>Show solution</summary>
-
-```{r}
-logit_hr <- glm(status ~ hormone_receptor, data = mbc, family = binomial)
-exp(cbind(OR = coef(logit_hr), confint(logit_hr)))
-```
-
-(a) The odds ratio is **0.366** for HR-positive vs HR-negative (95 % CI 0.204–0.614), i.e. **2.73**
-for HR-negative vs HR-positive. The corresponding hazard ratio was **1.66**. The odds ratio is
-clearly larger.
-
-(b) The two measures answer different questions. The **odds ratio** compares the odds of being dead
-*at the end of follow-up* — a cumulative, time-averaged quantity that depends on how long the study
-ran. The **hazard ratio** compares the instantaneous rate of death at any given time among those
-still alive. For a common outcome (here 83 % of patients died) the odds ratio moves away from 1 much
-faster than the hazard ratio, so it is not a good approximation of the relative risk or hazard.
-Logistic regression also ignores *when* patients died and treats censored patients as survivors.
-
-(c) The statement has several problems:
-
-- *"2.5 times more likely"* is a **relative-risk** interpretation. A hazard ratio is a ratio of
-  **rates**, not of probabilities; it does not mean 2.5 times the probability of dying.
-- The number 2.5 does not correspond to any estimate here (the OR is 2.73, the HR is 1.66), so it is
-  unclear what it refers to.
-- There is **no time frame**: "more likely to die" by when? By 1 year, 2 years, or ever?
-- If the number came from the logistic model it also **ignores censoring**, so it is biased.
-
-A correct version would be, for example: *"After diagnosis, HR-negative patients had a 66 % higher
-hazard of death at any point in time (HR 1.66, 95 % CI 1.42–1.96)."*
-
-</details>
 
 ## 6. Checking the proportional hazards assumption
 
@@ -823,69 +358,14 @@ survfit2(Surv(observed_time, status) ~ hormone_receptor, data = mbc) |>
 **20.** Are the two curves in the log–log plot roughly parallel? What does that say about the
 proportional hazards assumption for `hormone_receptor`?
 
-<details class="solution">
-<summary>Show solution</summary>
-
-
-The HR-negative curve remains consistently above the HR-positive curve, indicating poorer survival among HR-negative patients. The curves are close together initially, but the vertical distance increases during the first 10–15 months. Thereafter, the curves appear approximately parallel, although some variation in their separation remains. The confidence intervals widen towards the end of follow-up, particularly for the HR-negative group, where fewer patients remain at risk. Overall, the plot suggests some variation in the hazard ratio over time, particularly early in follow-up, but no strong evidence of a substantial violation of the proportional hazards assumption. This is consistent with the formal test in Question 21, which provides no statistical evidence against proportional hazards for hormone_receptor.
-
-Note that the curves become unstable at the far right (few patients at risk), so judgement should
-focus on the region where the risk set is adequate.
-
-</details>
-
 **21.** `cox.zph()` tests the proportional hazards assumption using (scaled) Schoenfeld residuals.
 Apply it to the multivariable model from Question 17.
 
 (a) Report and interpret the test for each covariate and for `GLOBAL`.
 (b) Is there anything to worry about? What would you do about it?
 
-<details class="solution">
-<summary>Show solution</summary>
-
-```{r}
-cox.zph(cox_multi)
-```
-
-(a) `cox.zph()` tests, for each covariate, whether its effect changes over time (null hypothesis: no
-time-varying effect, i.e. proportional hazards holds). Here `hormone_receptor` p = 0.43,
-`n_metastatic_sites` p = 0.15, `ecog_ps` p = 0.42 and `age_dec` p = 0.62 are all non-significant,
-while **`her2_status` has p = 0.024**. The `GLOBAL` test (p = 0.157) is not significant.
-
-(b) The assumption looks acceptable for the main predictors. The one figure worth a comment is
-HER2: there is some evidence that its effect varies over time. That said, HER2 was not clearly
-associated with survival to begin with (p = 0.21), so the practical impact is limited. The `GLOBAL`
-test gives no overall reason to abandon the proportional hazards model. A careful analysis would
-still inspect the Schoenfeld residual plot for HER2 (`plot(cox.zph(cox_multi)[2])`) to see how the
-effect changes, and report the HER2 hazard ratio as a time-averaged effect with this caveat.
-
-</details>
-
 **22.** Suppose a covariate in a Cox model clearly violates the proportional hazards assumption.
 Describe **two** ways of handling this, and say what the resulting estimates mean.
-
-<details class="solution">
-<summary>Show solution</summary>
-
-Two standard strategies:
-
-- **Stratification.** Include the variable as a stratification factor instead of a covariate,
-  `coxph(Surv(time, status) ~ x + strata(z), data = ...)`. This allows the baseline hazard to differ
-  between the levels of $z$ without estimating its effect. You do not get a hazard ratio for $z$
-  itself, but you get valid, adjusted hazard ratios for the other covariates. It works best for a
-  categorical variable with few levels and when its effect is not of primary interest.
-- **A time-varying effect.** Model the coefficient as a function of time, e.g. by adding an
-  interaction between the covariate and a function of time (Collett, Section 4.4.4), or by a
-  time-dependent coefficient model. This yields an effect estimate that **changes over time**, so
-  the single "average" hazard ratio is replaced by a description of how the hazard ratio evolves.
-
-Others: report the hazard ratio as a **time-averaged** effect with an explicit caveat; or switch to a
-model that does not require proportional hazards, such as an accelerated failure time / parametric
-model (Chapters 5–7) or a restricted mean survival time analysis. Whatever the choice, the important
-point is that a non-proportional effect should not be reported as a single constant hazard ratio
-without comment.
-
-</details>
 
 ## Wrap-up and reporting
 
