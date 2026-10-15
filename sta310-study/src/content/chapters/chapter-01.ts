@@ -149,9 +149,9 @@ export const chapter01: Chapter = {
       prompt:
         'For a single sample no assumption is made about the shape of S(t). If the estimated cumulative hazard at t = 15 months is 2.20, what is the corresponding estimated survivor function, and how should H(t) > 1 be read?',
       options: [
-        'S(15) = 0.89; H > 1 is impossible for a valid estimate.',
+        'S(15) = 0.89; a cumulative hazard above 1 is impossible for a valid estimate.',
         'S(15) = 2.20; H(t) is the survivor function on the log scale.',
-        'S(15) = 0.11; H(t) > 1 simply reflects that more than one event is expected in (0, t) when events can recur.',
+        'S(15) = 0.11; a cumulative hazard above 1 simply reflects that more than one event is expected in (0, t) when events can recur.',
         'S(15) = 1 - 2.20 = -1.20; the estimate is invalid.',
       ],
       correctIndex: 2,
